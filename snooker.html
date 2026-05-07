@@ -175,7 +175,9 @@ const HALF_WIDTH = TABLE_WIDTH / 2;
 const BOUND_X = HALF_LENGTH - BALL_RADIUS;
 const BOUND_Z = HALF_WIDTH - BALL_RADIUS;
 const TABLE_TOP_Y = TABLE_HEIGHT;
-const BALL_Y = TABLE_TOP_Y + 0.028;
+const SURFACE_THICKNESS = 0.025;
+const SURFACE_TOP_Y = TABLE_TOP_Y + SURFACE_THICKNESS / 2; // actual playing surface top face
+const BALL_Y = SURFACE_TOP_Y + BALL_RADIUS; // ball sits exactly on table surface
 
 // ==================== THREE.JS SETUP ====================
 const scene = new THREE.Scene();
@@ -511,14 +513,17 @@ let mustHitRed = true;
 let score = 0;
 let redsRemaining = 15;
 let aimAngle = 0; // radians, 0 = +X (toward reds), PI/2 = +Z
+let targetAimAngle = 0; // raw mouse input target, aimAngle lerps toward this
 let chargePower = 0;
 let chargeStartTime = 0;
 let messageText = '';
 let messageTimer = 0;
 
-// Camera control
+// Camera control (all smoothed via lerp toward targets)
 let cameraTheta = -Math.PI / 2; // horizontal orbit angle, -PI/2 = behind cue ball
 let cameraPhi = 0.55; // vertical angle (from horizontal)
+let targetCameraTheta = -Math.PI / 2; // raw input target for cameraTheta
+let targetCameraPhi = 0.55; // raw input target for cameraPhi
 let cameraDistance = 1.3;
 let isRightDragging = false;
 
@@ -566,16 +571,16 @@ document.addEventListener('mousemove', (e) => {
   const dx = e.movementX;
   const dy = e.movementY;
 
-  // Right-drag camera orbit
+  // Right-drag camera orbit → accumulate into target for smooth lerp
   if (isRightDragging) {
-    cameraTheta += dx * 0.0025;
-    cameraPhi += dy * 0.0025;
-    cameraPhi = Math.max(0.15, Math.min(1.2, cameraPhi));
+    targetCameraTheta += dx * 0.0025;
+    targetCameraPhi += dy * 0.0025;
+    targetCameraPhi = Math.max(0.15, Math.min(1.2, targetCameraPhi));
   }
 
-  // Aim angle (horizontal mouse movement)
+  // Aim angle → accumulate into target for smooth lerp
   if (gameState === State.AIMING || gameState === State.CHARGING) {
-    aimAngle += dx * 0.002;
+    targetAimAngle += dx * 0.002;
   }
 });
 
@@ -590,6 +595,9 @@ document.addEventListener('mousedown', (e) => {
   }
   if (e.button === 2) {
     isRightDragging = true;
+    // Sync targets to current values to prevent sudden jump
+    targetCameraTheta = cameraTheta;
+    targetCameraPhi = cameraPhi;
   }
 });
 
@@ -987,6 +995,8 @@ function animate(timestamp) {
 
       gameState = State.AIMING;
       cueGroup.visible = true;
+      // Sync aim target to current angle, prevent jump from stale mouse input
+      targetAimAngle = aimAngle;
 
       // Check if all reds cleared
       if (redsRemaining <= 0) {
@@ -1011,18 +1021,27 @@ function animate(timestamp) {
   // Update aim line
   updateAimLine();
 
-  // Update camera
+  // Smooth aim angle — lerp toward raw input target (no instant snapping)
+  const aimLerp = 0.10;
+  aimAngle += (targetAimAngle - aimAngle) * aimLerp;
+
+  // Smooth camera orbit angles — lerp toward raw input targets
+  const camLerp = 0.09;
+  cameraTheta += (targetCameraTheta - cameraTheta) * camLerp;
+  cameraPhi += (targetCameraPhi - cameraPhi) * camLerp;
+
+  // Auto-follow: when not manually orbiting, track behind aim direction
+  if (gameState === State.AIMING || gameState === State.CHARGING) {
+    if (!isRightDragging) {
+      targetCameraTheta = -aimAngle - Math.PI / 2;
+    }
+  }
+
+  // Update camera position
   updateCamera();
 
   // Update HUD
   updateHUD();
-
-  // Auto-rotate camera slightly toward aim direction when aiming
-  if (gameState === State.AIMING || gameState === State.CHARGING) {
-    const targetTheta = -aimAngle - Math.PI / 2;
-    // Smooth camera follow
-    cameraTheta += (targetTheta - cameraTheta) * 0.08;
-  }
 
   // Render
   renderer.render(scene, camera);
