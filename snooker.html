@@ -237,8 +237,8 @@ function createSpotMarker(x, z) {
 // Blue spot: table center
 // Pink spot: halfway between center and far cushion
 // Black spot: near far cushion
-tableGroup.add(createSpotMarker(-1.013, 0.55));
-tableGroup.add(createSpotMarker(-1.013, -0.55));
+tableGroup.add(createSpotMarker(-1.013, 0.292));
+tableGroup.add(createSpotMarker(-1.013, -0.292));
 tableGroup.add(createSpotMarker(-1.013, 0));
 tableGroup.add(createSpotMarker(0, 0));
 tableGroup.add(createSpotMarker(0.875, 0));
@@ -417,8 +417,8 @@ for (let row = 0; row < 5; row++) {
 // Colored balls at their spots
 // White ball starts in D-area behind baulk line, near player side
 const cueBall = createBall('white', -1.18, 0);
-createBall('yellow', -1.013, 0.55);
-createBall('green', -1.013, -0.55);
+createBall('yellow', -1.013, 0.292);
+createBall('green', -1.013, -0.292);
 createBall('brown', -1.013, 0);
 createBall('blue', 0, 0);
 createBall('pink', 0.875, 0);
@@ -726,8 +726,8 @@ function physicsStep(dt) {
 
 function respotColorBall(ball) {
   const spotPositions = {
-    yellow: { x: -1.013, z: 0.55 },
-    green: { x: -1.013, z: -0.55 },
+    yellow: { x: -1.013, z: 0.292 },
+    green: { x: -1.013, z: -0.292 },
     brown: { x: -1.013, z: 0 },
     blue: { x: 0, z: 0 },
     pink: { x: 0.875, z: 0 },
