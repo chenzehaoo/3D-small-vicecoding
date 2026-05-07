@@ -568,14 +568,14 @@ document.addEventListener('mousemove', (e) => {
 
   // Right-drag camera orbit
   if (isRightDragging) {
-    cameraTheta -= dx * 0.005;
-    cameraPhi += dy * 0.005;
+    cameraTheta += dx * 0.0025;
+    cameraPhi += dy * 0.0025;
     cameraPhi = Math.max(0.15, Math.min(1.2, cameraPhi));
   }
 
   // Aim angle (horizontal mouse movement)
   if (gameState === State.AIMING || gameState === State.CHARGING) {
-    aimAngle -= dx * 0.004;
+    aimAngle += dx * 0.002;
   }
 });
 
