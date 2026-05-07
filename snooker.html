@@ -176,8 +176,9 @@ const BOUND_X = HALF_LENGTH - BALL_RADIUS;
 const BOUND_Z = HALF_WIDTH - BALL_RADIUS;
 const TABLE_TOP_Y = TABLE_HEIGHT;
 const SURFACE_THICKNESS = 0.025;
-const SURFACE_TOP_Y = TABLE_TOP_Y + SURFACE_THICKNESS / 2; // actual playing surface top face
-const BALL_Y = SURFACE_TOP_Y + BALL_RADIUS; // ball sits exactly on table surface
+const SURFACE_TOP_Y = TABLE_TOP_Y + SURFACE_THICKNESS / 2; // actual playing surface top face (0.8625)
+// Ball bottom = BALL_Y - BALL_RADIUS; minus 0.0005 compensates sphere tessellation gap
+const BALL_Y = SURFACE_TOP_Y + BALL_RADIUS - 0.0005;
 
 // ==================== THREE.JS SETUP ====================
 const scene = new THREE.Scene();
@@ -218,7 +219,7 @@ sunLight.shadow.camera.left = -3;
 sunLight.shadow.camera.right = 3;
 sunLight.shadow.camera.top = 2;
 sunLight.shadow.camera.bottom = -2;
-sunLight.shadow.bias = -0.0004;
+sunLight.shadow.bias = -0.00008;
 sunLight.shadow.normalBias = 0.02;
 sunLight.shadow.radius = 5;
 scene.add(sunLight);
@@ -433,13 +434,12 @@ const BALL_COLORS = {
 };
 
 function createBall(colorKey, x, z) {
-  const mat = new THREE.MeshPhysicalMaterial({
+  const mat = new THREE.MeshStandardMaterial({
     color: BALL_COLORS[colorKey],
-    roughness: 0.18,
-    metalness: 0.05,
-    clearcoat: 0.4,
-    clearcoatRoughness: 0.2,
-    specularIntensity: 0.6,
+    roughness: 0.22,
+    metalness: 0.04,
+    transparent: false,
+    opacity: 1.0,
   });
   const mesh = new THREE.Mesh(ballGeo, mat);
   mesh.position.set(x, BALL_Y, z);
