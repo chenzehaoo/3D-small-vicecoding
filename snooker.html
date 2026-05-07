@@ -127,7 +127,7 @@
 <div id="crosshair"></div>
 <div id="power-bar-container"><div id="power-bar-fill"></div></div>
 <div id="hud">
-  <div><span class="label">目标:</span> <span id="target-color" class="target-red">红球</span></div>
+  <div><span class="label">目标:</span> <span id="target-color" class="target-red">开球 — 打红球</span></div>
   <div><span class="label">剩余红球:</span> <span id="reds-remaining">15</span></div>
   <div><span class="label">得分:</span> <span id="score">0</span></div>
 </div>
@@ -277,6 +277,22 @@ const dCurve = new THREE.CatmullRomCurve3(dPts, false);
 const dGeo = new THREE.BufferGeometry().setFromPoints(dCurve.getPoints(100));
 const dLine = new THREE.Line(dGeo, new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 1, depthTest: true }));
 tableGroup.add(dLine);
+
+// D-area highlight (shown during cue ball placement)
+const dShape = new THREE.Shape();
+dShape.moveTo(0, 0);
+for (let i = 0; i <= 48; i++) {
+  const angle = Math.PI / 2 + (Math.PI * i) / 48;
+  dShape.lineTo(dRadius * Math.cos(angle), dRadius * Math.sin(angle));
+}
+dShape.closePath();
+const dHighlightGeo = new THREE.ShapeGeometry(dShape);
+const dHighlightMat = new THREE.MeshBasicMaterial({ color: 0x4488ff, side: THREE.DoubleSide, transparent: true, opacity: 0.0, depthTest: true });
+const dHighlight = new THREE.Mesh(dHighlightGeo, dHighlightMat);
+dHighlight.rotation.x = -Math.PI / 2;
+dHighlight.position.set(baulkX, TABLE_TOP_Y + 0.014, 0);
+dHighlight.visible = false;
+tableGroup.add(dHighlight);
 
 // Spot markers for colored balls
 function createSpotMarker(x, z) {
@@ -507,13 +523,35 @@ cueButt.position.y = -0.175;
 cueGroup.add(cueButt);
 
 // ==================== GAME STATE ====================
-const State = { AIMING: 'aiming', CHARGING: 'charging', BALLS_MOVING: 'balls_moving' };
-let gameState = State.AIMING;
-let mustHitRed = true;
+const ShotState = { AIMING: 'aiming', CHARGING: 'charging', BALLS_MOVING: 'balls_moving' };
+let shotState = ShotState.AIMING;
+
+const Phase = {
+  BREAK_OFF: 'break_off',       // First shot: white in D, must hit red
+  MUST_HIT_RED: 'must_hit_red', // Normal play, must strike red first
+  MUST_HIT_COLOR: 'must_hit_color', // Just potted red, choose any color
+  COLOR_CLEARANCE: 'color_clearance', // All reds gone, colors in ascending order
+  GAME_OVER: 'game_over'
+};
+let gamePhase = Phase.BREAK_OFF;
+
+const CLEARANCE_ORDER = ['yellow', 'green', 'brown', 'blue', 'pink', 'black'];
+const COLOR_POINTS = { yellow: 2, green: 3, brown: 4, blue: 5, pink: 6, black: 7 };
+let clearanceIndex = 0; // which color in CLEARANCE_ORDER we're on during COLOR_CLEARANCE
+
 let score = 0;
 let redsRemaining = 15;
-let aimAngle = 0; // radians, 0 = +X (toward reds), PI/2 = +Z
-let targetAimAngle = 0; // raw mouse input target, aimAngle lerps toward this
+let placingCueBall = true; // start in placement mode (BREAK_OFF)
+
+// Per-shot tracking — reset on each shot, evaluated when balls stop
+let firstBallHit = null;      // first ball cue ball contacts after shot
+let ballsPocketedThisShot = []; // balls pocketed during this shot
+let cueTouchingBall = null;   // ball touching cue ball at shot time (push shot detection)
+let foulThisShot = false;
+let foulReason = '';
+
+let aimAngle = 0;
+let targetAimAngle = 0;
 let chargePower = 0;
 let chargeStartTime = 0;
 let messageText = '';
@@ -555,8 +593,8 @@ document.addEventListener('pointerlockchange', () => {
   } else {
     lockOverlay.classList.remove('hidden');
     // Cancel any in-progress charge if lock is lost
-    if (gameState === State.CHARGING) {
-      gameState = State.AIMING;
+    if (shotState === ShotState.CHARGING) {
+      shotState = ShotState.AIMING;
       chargePower = 0;
       document.getElementById('power-bar-container').classList.remove('active');
       document.getElementById('power-bar-fill').style.width = '0%';
@@ -571,6 +609,40 @@ document.addEventListener('mousemove', (e) => {
   const dx = e.movementX;
   const dy = e.movementY;
 
+  // Cue ball placement mode: mouse moves the white ball within D-area
+  if (placingCueBall && !isRightDragging) {
+    const moveScale = 0.0006;
+    // Get camera basis vectors projected to horizontal plane
+    const camDir = new THREE.Vector3();
+    camera.getWorldDirection(camDir);
+    camDir.y = 0;
+    camDir.normalize();
+    const camRight = new THREE.Vector3().crossVectors(camDir, new THREE.Vector3(0, 1, 0)).normalize();
+
+    // Map mouse delta to world movement
+    let newX = cueBall.position.x + (camDir.x * dy + camRight.x * dx) * moveScale;
+    let newZ = cueBall.position.z + (camDir.z * dy + camRight.z * dx) * moveScale;
+
+    // Constrain to D-area: behind baulk line, within semicircle radius
+    const bx = -1.013;
+    const bz = 0;
+    const maxDist = 0.292 - BALL_RADIUS;
+    if (newX > bx) newX = bx;
+    const dist = Math.hypot(newX - bx, newZ - bz);
+    if (dist > maxDist) {
+      const ang = Math.atan2(newZ - bz, newX - bx);
+      newX = bx + Math.cos(ang) * maxDist;
+      newZ = bz + Math.sin(ang) * maxDist;
+    }
+    // Also keep within table side bounds
+    newZ = Math.max(-BOUND_Z, Math.min(BOUND_Z, newZ));
+    newX = Math.max(-HALF_LENGTH + BALL_RADIUS, newX);
+
+    cueBall.position.set(newX, BALL_Y, newZ);
+    lastCueBallPos.copy(cueBall.position);
+    return;
+  }
+
   // Right-drag camera orbit → accumulate into target for smooth lerp
   if (isRightDragging) {
     targetCameraTheta += dx * 0.0025;
@@ -579,7 +651,7 @@ document.addEventListener('mousemove', (e) => {
   }
 
   // Aim angle → accumulate into target for smooth lerp
-  if (gameState === State.AIMING || gameState === State.CHARGING) {
+  if ((shotState === ShotState.AIMING || shotState === ShotState.CHARGING) && gamePhase !== Phase.GAME_OVER && !placingCueBall) {
     targetAimAngle += dx * 0.002;
   }
 });
@@ -587,8 +659,17 @@ document.addEventListener('mousemove', (e) => {
 document.addEventListener('mousedown', (e) => {
   if (!isPointerLocked) return;
 
-  if (e.button === 0 && gameState === State.AIMING) {
-    gameState = State.CHARGING;
+  // Left click in placement mode → confirm cue ball position
+  if (e.button === 0 && placingCueBall) {
+    placingCueBall = false;
+    dHighlight.visible = false;
+    dHighlight.material.opacity = 0;
+    showMessage('母球已定位，请瞄准击球');
+    return;
+  }
+
+  if (e.button === 0 && shotState === ShotState.AIMING && gamePhase !== Phase.GAME_OVER && !placingCueBall) {
+    shotState = ShotState.CHARGING;
     chargeStartTime = performance.now() / 1000;
     chargePower = 0;
     document.getElementById('power-bar-container').classList.add('active');
@@ -604,9 +685,9 @@ document.addEventListener('mousedown', (e) => {
 document.addEventListener('mouseup', (e) => {
   if (!isPointerLocked) return;
 
-  if (e.button === 0 && gameState === State.CHARGING) {
+  if (e.button === 0 && shotState === ShotState.CHARGING) {
     shoot(chargePower);
-    gameState = State.BALLS_MOVING;
+    shotState = ShotState.BALLS_MOVING;
     chargePower = 0;
     document.getElementById('power-bar-container').classList.remove('active');
     document.getElementById('power-bar-fill').style.width = '0%';
@@ -632,8 +713,21 @@ window.addEventListener('resize', () => {
 // ==================== SHOOTING ====================
 function shoot(power) {
   if (power < 0.02) {
-    gameState = State.AIMING;
+    shotState = ShotState.AIMING;
     return;
+  }
+
+  // Break-off validation: white must be in D-area
+  if (gamePhase === Phase.BREAK_OFF) {
+    const wx = cueBall.position.x;
+    const wz = cueBall.position.z;
+    const bx = -1.013;
+    const inD = (wx <= bx) && (Math.hypot(wx - bx, wz) <= 0.292 + BALL_RADIUS);
+    if (!inD) {
+      showMessage('开球犯规：母球必须在D型区域内！');
+      shotState = ShotState.AIMING;
+      return;
+    }
   }
 
   const speed = power * MAX_SHOT_POWER;
@@ -642,6 +736,23 @@ function shoot(power) {
 
   cueBall.userData.velocity.set(vx, vz);
   lastCueBallPos.copy(cueBall.position);
+
+  // Reset per-shot tracking
+  firstBallHit = null;
+  ballsPocketedThisShot = [];
+  foulThisShot = false;
+  foulReason = '';
+
+  // Detect if any ball is touching cue ball (for push shot foul detection)
+  cueTouchingBall = null;
+  for (const ball of balls) {
+    if (ball === cueBall || ball.userData.pocketed) continue;
+    const dist = Math.hypot(cueBall.position.x - ball.position.x, cueBall.position.z - ball.position.z);
+    if (dist < BALL_DIAMETER + 0.0005) {
+      cueTouchingBall = ball;
+      break;
+    }
+  }
 
   // Hide cue
   cueGroup.visible = false;
@@ -733,6 +844,12 @@ function physicsStep(dt) {
       const dist = Math.hypot(dx, dz);
 
       if (dist < BALL_DIAMETER && dist > 0.0001) {
+        // Track first ball cue ball hits after shot
+        if (firstBallHit === null) {
+          if (a === cueBall && b.userData.ballType !== 'white') firstBallHit = b;
+          else if (b === cueBall && a.userData.ballType !== 'white') firstBallHit = a;
+        }
+
         // Normalize collision normal
         const nx = dx / dist;
         const nz = dz / dist;
@@ -779,42 +896,14 @@ function physicsStep(dt) {
     }
   }
 
-  // Pocket detection
+  // Pocket detection — collect pocketed balls, defer rule evaluation
   for (const ball of active) {
     if (ball.userData.pocketed) continue;
 
     if (checkPockets(ball)) {
       ball.userData.pocketed = true;
       ball.visible = false;
-
-      if (ball === cueBall) {
-        // Cue ball pocketed — respot later
-        showMessage('母球进袋！');
-      } else if (ball.userData.ballType === 'red') {
-        redsRemaining--;
-        score += 1;
-        if (mustHitRed) {
-          mustHitRed = false;
-          showMessage('红球进袋！+1 分');
-        } else {
-          showMessage('犯规！应打彩球');
-        }
-      } else if (ball.userData.ballType !== 'white') {
-        if (mustHitRed) {
-          showMessage('犯规！应打红球');
-          // Respot the color ball
-          respotColorBall(ball);
-        } else {
-          const colorPoints = {
-            yellow: 2, green: 3, brown: 4, blue: 5, pink: 6, black: 7
-          };
-          score += colorPoints[ball.userData.ballType] || 0;
-          mustHitRed = true;
-          showMessage(`${getColorName(ball.userData.ballType)}进袋！+${colorPoints[ball.userData.ballType]} 分`);
-          // Respot color ball in simplified rules
-          respotColorBall(ball);
-        }
-      }
+      ballsPocketedThisShot.push(ball);
     }
   }
 }
@@ -835,6 +924,187 @@ function respotColorBall(ball) {
     ball.userData.pocketed = false;
     ball.userData.velocity.set(0, 0);
     ball.visible = true;
+  }
+}
+
+// ==================== SN00KER RULES ENGINE ====================
+function getRequiredTarget() {
+  switch (gamePhase) {
+    case Phase.BREAK_OFF:
+    case Phase.MUST_HIT_RED:
+      return 'red';
+    case Phase.MUST_HIT_COLOR:
+      return 'any_color'; // player chooses any color
+    case Phase.COLOR_CLEARANCE:
+      return CLEARANCE_ORDER[clearanceIndex];
+    default:
+      return null;
+  }
+}
+
+function getFoulPenaltyPoints(ballType) {
+  // Foul minimum 4 points, or the ball's value if higher
+  if (!ballType || ballType === 'white' || ballType === 'red') return 4;
+  return Math.max(4, COLOR_POINTS[ballType] || 4);
+}
+
+function evaluateShot() {
+  foulThisShot = false;
+  foulReason = '';
+
+  const cuePocketed = ballsPocketedThisShot.includes(cueBall);
+  const otherPocketed = ballsPocketedThisShot.filter(b => b !== cueBall);
+
+  // --- FOUL ②: Air shot — hit nothing ---
+  if (firstBallHit === null && !cuePocketed && otherPocketed.length === 0) {
+    foulThisShot = true;
+    foulReason = '空杆犯规：未碰到任何球';
+  }
+
+  // --- FOUL ⑥: Push shot — cue ball was touching target at shot time ---
+  if (cueTouchingBall !== null && firstBallHit === cueTouchingBall) {
+    foulThisShot = true;
+    foulReason = '贴球犯规：母球与目标球紧贴，禁止直接推杆击打';
+  }
+
+  // --- FOUL ①/④: Wrong target first hit ---
+  const required = getRequiredTarget();
+  if (firstBallHit !== null) {
+    const hitType = firstBallHit.userData.ballType;
+
+    if (required === 'red' && hitType !== 'red') {
+      foulThisShot = true;
+      foulReason = `犯规：应先打红球，却先碰到${getColorName(hitType)}`;
+    } else if (required === 'any_color' && hitType === 'red') {
+      foulThisShot = true;
+      foulReason = '犯规：应先打彩球，却先碰到红球';
+    } else if (required !== 'red' && required !== 'any_color' && required !== null) {
+      // COLOR_CLEARANCE: must hit specific color
+      if (hitType !== required) {
+        foulThisShot = true;
+        foulReason = `犯规：清台阶段应先打${getColorName(required)}，却先碰到${getColorName(hitType)}`;
+      }
+    }
+  }
+
+  // --- FOUL ③: Cue ball pocketed ---
+  if (cuePocketed) {
+    foulThisShot = true;
+    foulReason = foulReason || '犯规：母球落袋';
+  }
+
+  // --- Evaluate pocketed balls ---
+  let validPot = false;
+  for (const ball of otherPocketed) {
+    const ballType = ball.userData.ballType;
+
+    if (gamePhase === Phase.BREAK_OFF || gamePhase === Phase.MUST_HIT_RED) {
+      // Must pot red
+      if (ballType === 'red') {
+        redsRemaining--;
+        score += 1;
+        validPot = true;
+      } else {
+        // Color potted illegally — respot
+        foulThisShot = true;
+        foulReason = foulReason || '犯规：应打红球';
+        respotColorBall(ball);
+      }
+    } else if (gamePhase === Phase.MUST_HIT_COLOR) {
+      // Must pot a chosen color
+      if (ballType !== 'red' && ballType !== 'white') {
+        score += COLOR_POINTS[ballType] || 0;
+        // Respot color if reds remain
+        if (redsRemaining > 0) {
+          respotColorBall(ball);
+        }
+        validPot = true;
+      } else if (ballType === 'red') {
+        foulThisShot = true;
+        foulReason = foulReason || '犯规：应打彩球';
+        redsRemaining--;
+        // Red stays down (doesn't respot)
+      }
+    } else if (gamePhase === Phase.COLOR_CLEARANCE) {
+      const expectedColor = CLEARANCE_ORDER[clearanceIndex];
+      if (ballType === expectedColor) {
+        score += COLOR_POINTS[ballType] || 0;
+        clearanceIndex++;
+        validPot = true;
+      } else if (ballType !== 'red' && ballType !== 'white') {
+        // Wrong color potted during clearance
+        foulThisShot = true;
+        foulReason = foulReason || `犯规：清台阶段应先打${getColorName(expectedColor)}`;
+        respotColorBall(ball);
+      }
+    }
+  }
+
+  // --- Invalid pot (wrong ball pocketed without first-hit foul already) ---
+  if (otherPocketed.length > 0 && !validPot && !foulThisShot) {
+    foulThisShot = true;
+    foulReason = foulReason || '犯规：不合规进球';
+  }
+
+  // --- Apply foul penalty ---
+  if (foulThisShot) {
+    const penaltyTarget = firstBallHit || (otherPocketed.length > 0 ? otherPocketed[0] : null);
+    const penalty = getFoulPenaltyPoints(penaltyTarget ? penaltyTarget.userData.ballType : null);
+    score = Math.max(0, score - penalty);
+    showMessage(`${foulReason}  -${penalty}分`);
+  } else if (validPot) {
+    showMessage('有效进球！');
+  }
+
+  // --- Respot cue ball if pocketed ---
+  if (cuePocketed) {
+    cueBall.position.set(-1.18, BALL_Y, (Math.random() - 0.5) * 0.3);
+    cueBall.userData.pocketed = false;
+    cueBall.userData.velocity.set(0, 0);
+    cueBall.visible = true;
+    placingCueBall = true; // must re-place in D-area
+  }
+
+  // --- Phase transitions ---
+  if (!foulThisShot && validPot) {
+    switch (gamePhase) {
+      case Phase.BREAK_OFF:
+        gamePhase = Phase.MUST_HIT_COLOR; // red potted, now choose a color
+        break;
+      case Phase.MUST_HIT_RED:
+        gamePhase = Phase.MUST_HIT_COLOR;
+        break;
+      case Phase.MUST_HIT_COLOR:
+        if (redsRemaining <= 0) {
+          gamePhase = Phase.COLOR_CLEARANCE;
+          clearanceIndex = 0;
+          showMessage('所有红球已清！进入清台阶段：黄→绿→棕→蓝→粉→黑');
+        } else {
+          gamePhase = Phase.MUST_HIT_RED;
+        }
+        break;
+      case Phase.COLOR_CLEARANCE:
+        if (clearanceIndex >= CLEARANCE_ORDER.length) {
+          gamePhase = Phase.GAME_OVER;
+          showMessage(`游戏结束！最终得分: ${score} 分`);
+        }
+        break;
+    }
+  } else if (foulThisShot) {
+    // After a foul in break-off, return to break-off
+    if (gamePhase === Phase.BREAK_OFF) {
+      // Stay in break-off for re-shoot
+    } else if (gamePhase === Phase.MUST_HIT_COLOR) {
+      gamePhase = Phase.MUST_HIT_RED;
+    } else if (gamePhase === Phase.COLOR_CLEARANCE) {
+      // Stay in clearance phase
+    }
+    // MUST_HIT_RED stays MUST_HIT_RED after foul
+  }
+
+  // --- Check game over ---
+  if (gamePhase === Phase.GAME_OVER) {
+    showMessage(`游戏结束！最终得分: ${score} 分`);
   }
 }
 
@@ -892,7 +1162,7 @@ function updateCamera() {
 
   // Look target: slightly ahead of cue ball in aim direction when aiming
   let lookTarget;
-  if (gameState === State.AIMING || gameState === State.CHARGING) {
+  if (shotState === ShotState.AIMING || shotState === ShotState.CHARGING) {
     const lookX = cbPos.x + Math.cos(aimAngle) * 0.5;
     const lookZ = cbPos.z + Math.sin(aimAngle) * 0.5;
     lookTarget = new THREE.Vector3(lookX, BALL_Y, lookZ);
@@ -916,7 +1186,7 @@ aimLine.visible = false;
 scene.add(aimLine);
 
 function updateAimLine() {
-  if (gameState === State.BALLS_MOVING) {
+  if (shotState === ShotState.BALLS_MOVING) {
     aimLine.visible = false;
     return;
   }
@@ -939,14 +1209,41 @@ function updateAimLine() {
 
 // ==================== HUD UPDATE ====================
 function updateHUD() {
-  document.getElementById('target-color').textContent = mustHitRed ? '红球' : '彩球';
-  document.getElementById('target-color').className = mustHitRed ? 'target-red' : 'target-color';
-  document.getElementById('reds-remaining').textContent = redsRemaining;
-  document.getElementById('score').textContent = score;
+  const targetEl = document.getElementById('target-color');
+  const redsEl = document.getElementById('reds-remaining');
+  const scoreEl = document.getElementById('score');
 
-  if (redsRemaining <= 0 && mustHitRed) {
-    document.getElementById('target-color').textContent = '所有红球已清！';
-    document.getElementById('target-color').className = 'target-color';
+  redsEl.textContent = redsRemaining;
+  scoreEl.textContent = score;
+
+  if (placingCueBall) {
+    targetEl.textContent = '移动鼠标放置母球，左键确认';
+    targetEl.className = 'target-color';
+    return;
+  }
+
+  switch (gamePhase) {
+    case Phase.BREAK_OFF:
+      targetEl.textContent = '开球 — 打红球';
+      targetEl.className = 'target-red';
+      break;
+    case Phase.MUST_HIT_RED:
+      targetEl.textContent = '红球';
+      targetEl.className = 'target-red';
+      break;
+    case Phase.MUST_HIT_COLOR:
+      targetEl.textContent = '任选彩球';
+      targetEl.className = 'target-color';
+      break;
+    case Phase.COLOR_CLEARANCE:
+      const nextColor = CLEARANCE_ORDER[clearanceIndex];
+      targetEl.textContent = `清台: ${getColorName(nextColor)} (${COLOR_POINTS[nextColor]}分)`;
+      targetEl.className = 'target-color';
+      break;
+    case Phase.GAME_OVER:
+      targetEl.textContent = `游戏结束 得分:${score}`;
+      targetEl.className = 'target-color';
+      break;
   }
 }
 
@@ -963,7 +1260,7 @@ function animate(timestamp) {
   const dt = Math.min(rawDt, 0.05);
 
   // Charge power
-  if (gameState === State.CHARGING) {
+  if (shotState === ShotState.CHARGING) {
     const elapsed = lastTime - chargeStartTime;
     chargePower = Math.min(elapsed / CHARGE_TIME, 1.0);
     const pct = chargePower * 100;
@@ -971,7 +1268,7 @@ function animate(timestamp) {
   }
 
   // Physics
-  if (gameState === State.BALLS_MOVING) {
+  if (shotState === ShotState.BALLS_MOVING) {
     const subDt = dt / SUBSTEPS;
     for (let s = 0; s < SUBSTEPS; s++) {
       physicsStep(subDt);
@@ -984,24 +1281,23 @@ function animate(timestamp) {
 
     // Check if all balls stopped
     if (allBallsStopped()) {
-      // Respot cue ball if pocketed
-      if (cueBall.userData.pocketed) {
-        cueBall.position.set(-1.18, BALL_Y, (Math.random() - 0.5) * 0.3);
-        cueBall.userData.pocketed = false;
-        cueBall.userData.velocity.set(0, 0);
-        cueBall.visible = true;
+      // Evaluate shot according to full snooker rules (once per shot)
+      evaluateShot();
+
+      if (!cueBall.userData.pocketed) {
         lastCueBallPos.copy(cueBall.position);
       }
 
-      gameState = State.AIMING;
-      cueGroup.visible = true;
+      if (gamePhase === Phase.GAME_OVER) {
+        // Transition out of BALLS_MOVING so we don't re-evaluate every frame
+        shotState = ShotState.AIMING;
+        cueGroup.visible = false;
+      } else {
+        shotState = ShotState.AIMING;
+        cueGroup.visible = true;
+      }
       // Sync aim target to current angle, prevent jump from stale mouse input
       targetAimAngle = aimAngle;
-
-      // Check if all reds cleared
-      if (redsRemaining <= 0) {
-        mustHitRed = false;
-      }
     }
   }
 
@@ -1014,12 +1310,18 @@ function animate(timestamp) {
   }
 
   // Update cue
-  if (gameState !== State.BALLS_MOVING) {
+  if (shotState !== ShotState.BALLS_MOVING && gamePhase !== Phase.GAME_OVER && !placingCueBall) {
     updateCuePosition();
+  } else if (placingCueBall) {
+    cueGroup.visible = false;
   }
 
   // Update aim line
-  updateAimLine();
+  if (gamePhase !== Phase.GAME_OVER && !placingCueBall) {
+    updateAimLine();
+  } else if (placingCueBall) {
+    aimLine.visible = false;
+  }
 
   // Smooth aim angle — lerp toward raw input target (no instant snapping)
   const aimLerp = 0.10;
@@ -1031,7 +1333,7 @@ function animate(timestamp) {
   cameraPhi += (targetCameraPhi - cameraPhi) * camLerp;
 
   // Auto-follow: when not manually orbiting, track behind aim direction
-  if (gameState === State.AIMING || gameState === State.CHARGING) {
+  if (shotState === ShotState.AIMING || shotState === ShotState.CHARGING) {
     if (!isRightDragging) {
       targetCameraTheta = -aimAngle - Math.PI / 2;
     }
@@ -1039,6 +1341,15 @@ function animate(timestamp) {
 
   // Update camera position
   updateCamera();
+
+  // D-area highlight visibility (cue ball placement mode)
+  if (placingCueBall && gamePhase !== Phase.GAME_OVER) {
+    dHighlight.visible = true;
+    dHighlight.material.opacity = Math.min(1, dHighlight.material.opacity + dt * 3);
+  } else {
+    dHighlight.material.opacity = Math.max(0, dHighlight.material.opacity - dt * 3);
+    if (dHighlight.material.opacity <= 0.01) dHighlight.visible = false;
+  }
 
   // Update HUD
   updateHUD();
@@ -1053,9 +1364,11 @@ updateAimLine();
 updateHUD();
 requestAnimationFrame(animate);
 
-console.log('3D 第一人称斯诺克已就绪 (鼠标锁定模式)');
-console.log('点击屏幕锁定鼠标 | 移动鼠标: 瞄准 | 按住左键: 蓄力 | 释放: 击球');
-console.log('右键拖动: 旋转视角 | 滚轮: 缩放 | ESC: 释放鼠标');
+console.log('3D 斯诺克 — 完整规则版');
+console.log('开球: 母球在D区内, 必须先打红球');
+console.log('循环: 红球→彩球→红球→彩球...');
+console.log('清台: 红球全清后按 黄→绿→棕→蓝→粉→黑 顺序击打');
+console.log('犯规: 空杆/错击/母球落袋/贴球推杆 — 罚分');
 </script>
 </body>
 </html>
