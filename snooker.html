@@ -205,12 +205,12 @@ baulkLine.rotation.x = -Math.PI / 2;
 baulkLine.position.set(baulkX, TABLE_TOP_Y + 0.013, 0);
 tableGroup.add(baulkLine);
 
-// D semicircle
+// D semicircle — behind baulk line toward near cushion (negative X side)
 const dRadius = 0.292;
 const dSegments = 48;
 const dPts = [];
 for (let i = 0; i <= dSegments; i++) {
-  const angle = -Math.PI / 2 + (Math.PI * i) / dSegments;
+  const angle = Math.PI / 2 + (Math.PI * i) / dSegments; // π/2 → 3π/2, cos ≤ 0 → toward -X (near cushion)
   dPts.push(new THREE.Vector3(baulkX + dRadius * Math.cos(angle), TABLE_TOP_Y + 0.0135, dRadius * Math.sin(angle)));
 }
 const dCurve = new THREE.CatmullRomCurve3(dPts, false);
@@ -228,12 +228,15 @@ function createSpotMarker(x, z) {
   return spot;
 }
 
-// Yellow spot: (-1.013, 0.55) — right side from player at baulk end
-// Green spot: (-1.013, -0.55) — left side
-// Brown spot: (-1.013, 0) — center
-// Blue spot: (0, 0)
-// Pink spot: (0.875, 0)
-// Black spot: (1.426, 0)
+// Spot markers for colored balls (standard snooker baulk-line layout)
+// Player stands at -X end; looking toward +X (far end with black ball)
+// Near cushion at x=-1.75, baulk line at x=-1.013, far cushion at x=+1.75
+// Yellow spot: baulk line right side from player's view
+// Green spot: baulk line left side from player's view
+// Brown spot: baulk line center
+// Blue spot: table center
+// Pink spot: halfway between center and far cushion
+// Black spot: near far cushion
 tableGroup.add(createSpotMarker(-1.013, 0.55));
 tableGroup.add(createSpotMarker(-1.013, -0.55));
 tableGroup.add(createSpotMarker(-1.013, 0));
@@ -412,7 +415,8 @@ for (let row = 0; row < 5; row++) {
 }
 
 // Colored balls at their spots
-const cueBall = createBall('white', -0.8, 0);
+// White ball starts in D-area behind baulk line, near player side
+const cueBall = createBall('white', -1.18, 0);
 createBall('yellow', -1.013, 0.55);
 createBall('green', -1.013, -0.55);
 createBall('brown', -1.013, 0);
@@ -464,7 +468,7 @@ let prevMouseX = 0;
 let prevMouseY = 0;
 
 // Cue ball tracking for camera
-let lastCueBallPos = new THREE.Vector3(-0.8, BALL_Y, 0);
+let lastCueBallPos = new THREE.Vector3(-1.18, BALL_Y, 0);
 
 // ==================== INPUT HANDLING ====================
 const keys = {};
@@ -887,7 +891,7 @@ function animate(timestamp) {
     if (allBallsStopped()) {
       // Respot cue ball if pocketed
       if (cueBall.userData.pocketed) {
-        cueBall.position.set(-0.8, BALL_Y, (Math.random() - 0.5) * 0.3);
+        cueBall.position.set(-1.18, BALL_Y, (Math.random() - 0.5) * 0.3);
         cueBall.userData.pocketed = false;
         cueBall.userData.velocity.set(0, 0);
         cueBall.visible = true;
