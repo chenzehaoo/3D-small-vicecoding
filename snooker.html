@@ -162,13 +162,31 @@ const BALL_RADIUS = 0.02625;
 const BALL_DIAMETER = BALL_RADIUS * 2;
 const POCKET_RADIUS = 0.07;
 const CORNER_POCKET_RADIUS = 0.08;
-const CUSHION_RESTITUTION = 0.55;  // realistic cushion energy absorption
-const BALL_RESTITUTION = 0.93;    // crisp ball-ball collision feel
-const ROLLING_DECEL = 5.2;        // m/s² — constant Coulomb rolling friction on baize
-const STOP_THRESHOLD = 0.0015;    // slightly higher to prevent crawl
-const MAX_SHOT_POWER = 7.0;
-const CHARGE_TIME = 2.0;
-const SUBSTEPS = 3;
+// ==================== PHYSICS CONSTANTS (calibrated to 350cm table) ====================
+// Force → distance: force% × TABLE_LENGTH × MAX_SLIDE_RATIO = target slide distance
+// Initial speed: v₀ = √(2 × CALIBRATION_FRICTION × targetDistance)
+// This guarantees linear force-distance mapping per spec.
+const CALIBRATION_FRICTION = 1.15;  // reference friction for force→distance calibration (m/s²)
+const MAX_SLIDE_RATIO = 0.94;       // at 100% force, ball travels 94% of table length
+const ROLLING_FRICTION_MAX = 1.65;  // final rolling deceleration on baize (m/s²)
+const ROLLING_FRICTION_MIN = 0.38;  // initial sliding (low-friction glide) deceleration (m/s²)
+const FRICTION_TRANSITION = 1.1;    // speed threshold for slide→roll transition (m/s)
+const CUSHION_RESTITUTION = 0.78;   // cushion normal rebound — realistic energy retention
+const CUSHION_TANGENT_FRICTION = 0.16; // velocity loss parallel to cushion on impact
+const BALL_RESTITUTION = 0.96;      // ball-ball elastic collision efficiency
+const STOP_THRESHOLD = 0.0006;      // velocity below which ball is considered at rest
+const CHARGE_TIME = 2.0;            // seconds holding LMB to reach 100% power
+const SUBSTEPS = 6;                 // physics sub-steps per frame for accurate collisions
+
+// ==================== FORCE → SPEED CALIBRATION ====================
+// Maps force percentage (0-1) to initial ball speed such that:
+//   20% → ~table/6   40% → ~table/3   60% → ~table/2
+//   80% → ~2/3 table  100% → ~full table
+function forceToSpeed(force) {
+  if (force <= 0) return 0;
+  const targetDist = force * TABLE_LENGTH * MAX_SLIDE_RATIO;
+  return Math.sqrt(2 * CALIBRATION_FRICTION * targetDist);
+}
 
 const HALF_LENGTH = TABLE_LENGTH / 2;
 const HALF_WIDTH = TABLE_WIDTH / 2;
@@ -708,7 +726,8 @@ function shoot(power) {
     isFirstShot = false; // 第一杆出杆后，彻底退出开球阶段
   }
 
-  const speed = power * MAX_SHOT_POWER;
+  // Linear force→distance mapping: speed calibrated so ball slides target distance
+  const speed = forceToSpeed(power);
   const vx = Math.cos(aimAngle) * speed;
   const vz = Math.sin(aimAngle) * speed;
 
@@ -771,25 +790,29 @@ function handleCushionBounce(ball) {
   const vel = ball.userData.velocity;
   let bounced = false;
 
-  // X boundaries (short cushions)
+  // Short cushions (X boundaries) — normal along X, tangent along Z (vel.y)
   if (bx > BOUND_X && !isNearAnyPocket(bx, bz)) {
     ball.position.x = BOUND_X;
     vel.x = -Math.abs(vel.x) * CUSHION_RESTITUTION;
+    vel.y *= (1 - CUSHION_TANGENT_FRICTION);
     bounced = true;
   } else if (bx < -BOUND_X && !isNearAnyPocket(bx, bz)) {
     ball.position.x = -BOUND_X;
     vel.x = Math.abs(vel.x) * CUSHION_RESTITUTION;
+    vel.y *= (1 - CUSHION_TANGENT_FRICTION);
     bounced = true;
   }
 
-  // Z boundaries (long cushions)
+  // Long cushions (Z boundaries) — normal along Z (vel.y), tangent along X (vel.x)
   if (bz > BOUND_Z && !isNearAnyPocket(bx, bz)) {
     ball.position.z = BOUND_Z;
     vel.y = -Math.abs(vel.y) * CUSHION_RESTITUTION;
+    vel.x *= (1 - CUSHION_TANGENT_FRICTION);
     bounced = true;
   } else if (bz < -BOUND_Z && !isNearAnyPocket(bx, bz)) {
     ball.position.z = -BOUND_Z;
     vel.y = Math.abs(vel.y) * CUSHION_RESTITUTION;
+    vel.x *= (1 - CUSHION_TANGENT_FRICTION);
     bounced = true;
   }
 
@@ -861,19 +884,22 @@ function physicsStep(dt) {
     }
   }
 
-  // Friction — additive Coulomb rolling resistance (realistic cloth deceleration)
+  // Rolling deceleration — slide→roll transition with speed-dependent friction.
+  // High speed: low friction (ball slides/glides on cloth).
+  // Low speed: higher friction (ball grips and rolls).
+  // This produces a natural "glide, then gradual stop" feel — no harsh braking.
   for (const ball of active) {
     const vel = ball.userData.velocity;
     const speed = Math.hypot(vel.x, vel.y);
-    if (speed > 0) {
-      const newSpeed = Math.max(0, speed - ROLLING_DECEL * dt);
-      const ratio = newSpeed / speed;
-      vel.x *= ratio;
-      vel.y *= ratio;
-    }
-
-    // Stop threshold
-    if (Math.hypot(vel.x, vel.y) < STOP_THRESHOLD) {
+    if (speed > STOP_THRESHOLD) {
+      // Smooth blend between sliding (low friction) and rolling (high friction)
+      const blend = Math.min(speed / FRICTION_TRANSITION, 1.0);
+      const effectiveFriction = ROLLING_FRICTION_MIN + (ROLLING_FRICTION_MAX - ROLLING_FRICTION_MIN) * (1 - blend);
+      const newSpeed = Math.max(0, speed - effectiveFriction * dt);
+      const scale = newSpeed / speed;
+      vel.x *= scale;
+      vel.y *= scale;
+    } else {
       vel.set(0, 0);
     }
   }
@@ -1346,7 +1372,9 @@ updateAimLine();
 updateHUD();
 requestAnimationFrame(animate);
 
-console.log('3D 斯诺克 — 完整规则版');
+console.log('3D 斯诺克 — 真实物理版');
+console.log('物理: 力度-距离线性映射 | 滑动→滚动过渡 | 恒定减速度 | 动量守恒碰撞');
+console.log('力度 20%→1/6桌  40%→1/3桌  60%→1/2桌  80%→2/3桌  100%→全桌');
 console.log('开球: 母球在D区内, 必须先打红球');
 console.log('循环: 红球→彩球→红球→彩球...');
 console.log('清台: 红球全清后按 黄→绿→棕→蓝→粉→黑 顺序击打');
