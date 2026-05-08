@@ -162,10 +162,10 @@ const BALL_RADIUS = 0.02625;
 const BALL_DIAMETER = BALL_RADIUS * 2;
 const POCKET_RADIUS = 0.07;
 const CORNER_POCKET_RADIUS = 0.08;
-const CUSHION_RESTITUTION = 0.65;
-const BALL_RESTITUTION = 0.96;
-const FRICTION = 0.992;
-const STOP_THRESHOLD = 0.0008;
+const CUSHION_RESTITUTION = 0.55;  // realistic cushion energy absorption
+const BALL_RESTITUTION = 0.93;    // crisp ball-ball collision feel
+const ROLLING_DECEL = 5.2;        // m/s² — constant Coulomb rolling friction on baize
+const STOP_THRESHOLD = 0.0015;    // slightly higher to prevent crawl
 const MAX_SHOT_POWER = 7.0;
 const CHARGE_TIME = 2.0;
 const SUBSTEPS = 3;
@@ -294,31 +294,7 @@ dHighlight.position.set(baulkX, TABLE_TOP_Y + 0.014, 0);
 dHighlight.visible = false;
 tableGroup.add(dHighlight);
 
-// Spot markers for colored balls
-function createSpotMarker(x, z) {
-  const spotGeo = new THREE.RingGeometry(0.008, 0.014, 24);
-  const spotMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-  const spot = new THREE.Mesh(spotGeo, spotMat);
-  spot.rotation.x = -Math.PI / 2;
-  spot.position.set(x, TABLE_TOP_Y + 0.0138, z);
-  return spot;
-}
-
-// Spot markers for colored balls (standard snooker baulk-line layout)
-// Player stands at -X end; looking toward +X (far end with black ball)
-// Near cushion at x=-1.75, baulk line at x=-1.013, far cushion at x=+1.75
-// Yellow spot: baulk line right side from player's view
-// Green spot: baulk line left side from player's view
-// Brown spot: baulk line center
-// Blue spot: table center
-// Pink spot: halfway between center and far cushion
-// Black spot: near far cushion
-tableGroup.add(createSpotMarker(-1.013, 0.292));
-tableGroup.add(createSpotMarker(-1.013, -0.292));
-tableGroup.add(createSpotMarker(-1.013, 0));
-tableGroup.add(createSpotMarker(0, 0));
-tableGroup.add(createSpotMarker(0.875, 0));
-tableGroup.add(createSpotMarker(1.426, 0));
+// Spot markers removed — clean green baize with no auxiliary markings
 
 // Cushions
 const cushionMat = new THREE.MeshStandardMaterial({ color: 0x5c3a1e, roughness: 0.55, metalness: 0.05 });
@@ -883,15 +859,19 @@ function physicsStep(dt) {
     }
   }
 
-  // Friction
+  // Friction — additive Coulomb rolling resistance (realistic cloth deceleration)
   for (const ball of active) {
     const vel = ball.userData.velocity;
-    vel.x *= FRICTION;
-    vel.y *= FRICTION;
+    const speed = Math.hypot(vel.x, vel.y);
+    if (speed > 0) {
+      const newSpeed = Math.max(0, speed - ROLLING_DECEL * dt);
+      const ratio = newSpeed / speed;
+      vel.x *= ratio;
+      vel.y *= ratio;
+    }
 
     // Stop threshold
-    const speed = Math.hypot(vel.x, vel.y);
-    if (speed < STOP_THRESHOLD) {
+    if (Math.hypot(vel.x, vel.y) < STOP_THRESHOLD) {
       vel.set(0, 0);
     }
   }
