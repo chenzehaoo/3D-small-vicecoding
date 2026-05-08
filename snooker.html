@@ -518,6 +518,7 @@ let clearanceIndex = 0; // which color in CLEARANCE_ORDER we're on during COLOR_
 let score = 0;
 let redsRemaining = 15;
 let placingCueBall = true; // start in placement mode (BREAK_OFF)
+let isFirstShot = true;     // 仅第一杆首次出杆执行开球规则校验
 
 // Per-shot tracking — reset on each shot, evaluated when balls stop
 let firstBallHit = null;      // first ball cue ball contacts after shot
@@ -693,8 +694,8 @@ function shoot(power) {
     return;
   }
 
-  // Break-off validation: white must be in D-area
-  if (gamePhase === Phase.BREAK_OFF) {
+  // Break-off validation: only applies to the very first shot of the game
+  if (isFirstShot) {
     const wx = cueBall.position.x;
     const wz = cueBall.position.z;
     const bx = -1.013;
@@ -704,6 +705,7 @@ function shoot(power) {
       shotState = ShotState.AIMING;
       return;
     }
+    isFirstShot = false; // 第一杆出杆后，彻底退出开球阶段
   }
 
   const speed = power * MAX_SHOT_POWER;
