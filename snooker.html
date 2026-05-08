@@ -157,11 +157,19 @@ const TABLE_LENGTH = 3.5;
 const TABLE_WIDTH = 1.75;
 const TABLE_HEIGHT = 0.85;
 const CUSHION_HEIGHT = 0.04;
-const CUSHION_THICK = 0.09;
+const CUSHION_THICK = 0.09;        // 棕色实木边框厚度
 const BALL_RADIUS = 0.02625;
 const BALL_DIAMETER = BALL_RADIUS * 2;
 const POCKET_RADIUS = 0.07;
 const CORNER_POCKET_RADIUS = 0.08;
+
+// ==================== FRAME GEOMETRY ====================
+// 棕色实木边框定义球桌外围尺寸
+// 绿色台面严格在四条边框内侧，不超边框
+const FRAME_INNER_LENGTH = TABLE_LENGTH - 2 * CUSHION_THICK;  // 绿色台面长度 = 3.32
+const FRAME_INNER_WIDTH = TABLE_WIDTH - 2 * CUSHION_THICK;     // 绿色台面宽度 = 1.57
+const FRAME_HALF_LENGTH = FRAME_INNER_LENGTH / 2;             // 1.66
+const FRAME_HALF_WIDTH = FRAME_INNER_WIDTH / 2;                 // 0.785
 // ==================== PHYSICS CONSTANTS (calibrated to 350cm table) ====================
 // Force → distance: force% × TABLE_LENGTH × MAX_SLIDE_RATIO = target slide distance
 // Initial speed: v₀ = √(2 × CALIBRATION_FRICTION × targetDistance)
@@ -188,10 +196,11 @@ function forceToSpeed(force) {
   return Math.sqrt(2 * CALIBRATION_FRICTION * targetDist);
 }
 
-const HALF_LENGTH = TABLE_LENGTH / 2;
-const HALF_WIDTH = TABLE_WIDTH / 2;
-const BOUND_X = HALF_LENGTH - BALL_RADIUS;
-const BOUND_Z = HALF_WIDTH - BALL_RADIUS;
+const HALF_LENGTH = TABLE_LENGTH / 2;    // 1.75 - outer table half length
+const HALF_WIDTH = TABLE_WIDTH / 2;     // 0.875 - outer table half width
+// Physics bounds use FRAME dimensions (cushion inner edges)
+const BOUND_X = FRAME_HALF_LENGTH - BALL_RADIUS;
+const BOUND_Z = FRAME_HALF_WIDTH - BALL_RADIUS;
 const TABLE_TOP_Y = TABLE_HEIGHT;
 const SURFACE_THICKNESS = 0.025;
 const SURFACE_TOP_Y = TABLE_TOP_Y + SURFACE_THICKNESS / 2; // actual playing surface top face (0.8625)
@@ -389,18 +398,76 @@ scene.add(carpet);
 const tableGroup = new THREE.Group();
 scene.add(tableGroup);
 
-// Playing surface
-const surfaceGeo = new THREE.BoxGeometry(TABLE_LENGTH, 0.025, TABLE_WIDTH);
-const surfaceMat = new THREE.MeshStandardMaterial({ color: 0x0d5e2b, map: baizeTexture, roughness: 0.82, metalness: 0.02 });
+// Playing surface with PROPER CUTOUTS for all 6 pockets
+// Uses ShapeGeometry with holes for clean pocket openings
+// GREEN BAIZE is strictly INSIDE the brown frame - dimensions = FRAME_INNER_LENGTH × FRAME_INNER_WIDTH
+function createPlayingSurfaceWithPockets() {
+  const shape = new THREE.Shape();
+  const L = FRAME_INNER_LENGTH;
+  const W = FRAME_INNER_WIDTH;
+  const pr = CORNER_POCKET_RADIUS;  // corner pocket radius = 0.08
+  const sr = POCKET_RADIUS;         // side pocket radius = 0.07
+
+  // Main rectangle outline of GREEN baize surface (inside brown frame)
+  shape.moveTo(-L / 2, -W / 2);
+  shape.lineTo(L / 2, -W / 2);
+  shape.lineTo(L / 2, W / 2);
+  shape.lineTo(-L / 2, W / 2);
+  shape.closePath();
+
+  // === CUT OUT CORNER POCKET HOLES (4 corners) ===
+  // Corner pockets are at the INNER corners of brown frame where rails meet
+  // Position: (±FRAME_HALF_LENGTH, ±FRAME_HALF_WIDTH)
+  const pocketHoleRadius = pr * 1.15; // slightly larger than pocket opening
+
+  function cutCornerPocketHole(cx, cy) {
+    const hole = new THREE.Path();
+    hole.absarc(cx, cy, pocketHoleRadius, 0, Math.PI * 2, false);
+    shape.holes.push(hole);
+  }
+
+  cutCornerPocketHole(-FRAME_HALF_LENGTH, -FRAME_HALF_WIDTH); // bottom-left
+  cutCornerPocketHole(-FRAME_HALF_LENGTH, FRAME_HALF_WIDTH);  // top-left
+  cutCornerPocketHole(FRAME_HALF_LENGTH, -FRAME_HALF_WIDTH);  // bottom-right
+  cutCornerPocketHole(FRAME_HALF_LENGTH, FRAME_HALF_WIDTH);   // top-right
+
+  // === CUT OUT SIDE POCKET HOLES (2 middle pockets) ===
+  // Middle pockets are centered on the INNER edge of LONG brown rails
+  // Position: (0, ±FRAME_HALF_WIDTH)
+  const sideHoleHalfLen = sr * 1.6;
+  const sideHoleHalfWid = sr * 1.05;
+
+  function cutSidePocketHole(cx, cz) {
+    const hole = new THREE.Path();
+    // D-shape: straight edge toward table center, curved toward cushion
+    hole.moveTo(cx, cz - sideHoleHalfWid);
+    hole.lineTo(cx + sideHoleHalfLen, cz - sideHoleHalfWid);
+    hole.absarc(cx + sideHoleHalfLen, cz, sideHoleHalfWid, -Math.PI / 2, Math.PI / 2, false);
+    hole.lineTo(cx, cz + sideHoleHalfWid);
+    hole.closePath();
+    shape.holes.push(hole);
+  }
+
+  cutSidePocketHole(0, -FRAME_HALF_WIDTH); // bottom middle
+  cutSidePocketHole(0, FRAME_HALF_WIDTH);   // top middle
+
+  const geo = new THREE.ShapeGeometry(shape, 4);
+  return geo;
+}
+
+const surfaceGeo = createPlayingSurfaceWithPockets();
+const surfaceMat = new THREE.MeshStandardMaterial({ color: 0x0d5e2b, map: baizeTexture, roughness: 0.82, metalness: 0.02, side: THREE.DoubleSide });
 const surface = new THREE.Mesh(surfaceGeo, surfaceMat);
+surface.rotation.x = -Math.PI / 2;
 surface.position.y = TABLE_TOP_Y;
 surface.receiveShadow = true;
 surface.castShadow = true;
+surface.renderOrder = 1;
 tableGroup.add(surface);
 
-// Baulk line (white line on the table)
-const baulkX = -HALF_LENGTH + 0.737;
-const baulkGeo = new THREE.PlaneGeometry(0.008, TABLE_WIDTH - 0.04);
+// Baulk line (white line on the table) - positioned within green baize area
+const baulkX = -FRAME_HALF_LENGTH + 0.737;
+const baulkGeo = new THREE.PlaneGeometry(0.008, FRAME_INNER_WIDTH - 0.04);
 const baulkMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
 const baulkLine = new THREE.Mesh(baulkGeo, baulkMat);
 baulkLine.rotation.x = -Math.PI / 2;
@@ -441,137 +508,287 @@ tableGroup.add(dHighlight);
 // Cushions
 const cushionMat = new THREE.MeshStandardMaterial({ color: 0x5c3a1e, map: woodTexture, roughness: 0.55, metalness: 0.05 });
 const railTopMat = new THREE.MeshStandardMaterial({ color: 0x6b4423, map: woodTexture, roughness: 0.45, metalness: 0.05 });
-const pocketFacingMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.3, metalness: 0.1 });
-const pocketInnerMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.5, metalness: 0.05 });
 const apronMat = new THREE.MeshStandardMaterial({ color: 0x5c3a1e, map: woodTexture, roughness: 0.55, metalness: 0.05 });
 const legMat = new THREE.MeshStandardMaterial({ color: 0x3d2010, map: woodTexture, roughness: 0.45, metalness: 0.08 });
 
-// Long cushions (along X, at Z edges)
-const longCushionGeo = new THREE.BoxGeometry(TABLE_LENGTH, CUSHION_HEIGHT, CUSHION_THICK);
+// Long cushions (along X, at Z edges - on top of green baize at frame inner edge)
+// Positioned at FRAME_HALF_WIDTH from center, on top of baize surface
+const longCushionGeo = new THREE.BoxGeometry(FRAME_INNER_LENGTH, CUSHION_HEIGHT, CUSHION_THICK);
 const rightCushion = new THREE.Mesh(longCushionGeo, cushionMat);
-rightCushion.position.set(0, TABLE_TOP_Y + CUSHION_HEIGHT / 2, HALF_WIDTH + CUSHION_THICK / 2);
+rightCushion.position.set(0, TABLE_TOP_Y + CUSHION_HEIGHT / 2, FRAME_HALF_WIDTH + CUSHION_THICK / 2);
 rightCushion.castShadow = true;
 rightCushion.receiveShadow = true;
 tableGroup.add(rightCushion);
 
 const leftCushion = new THREE.Mesh(longCushionGeo, cushionMat);
-leftCushion.position.set(0, TABLE_TOP_Y + CUSHION_HEIGHT / 2, -HALF_WIDTH - CUSHION_THICK / 2);
+leftCushion.position.set(0, TABLE_TOP_Y + CUSHION_HEIGHT / 2, -FRAME_HALF_WIDTH - CUSHION_THICK / 2);
 leftCushion.castShadow = true;
 leftCushion.receiveShadow = true;
 tableGroup.add(leftCushion);
 
-// Short cushions (along Z, at X edges)
-const shortCushionGeo = new THREE.BoxGeometry(CUSHION_THICK, CUSHION_HEIGHT, TABLE_WIDTH + CUSHION_THICK * 2);
+// Short cushions (along Z, at X edges - on top of green baize at frame inner edge)
+const shortCushionGeo = new THREE.BoxGeometry(CUSHION_THICK, CUSHION_HEIGHT, FRAME_INNER_WIDTH);
 const farCushion = new THREE.Mesh(shortCushionGeo, cushionMat);
-farCushion.position.set(HALF_LENGTH + CUSHION_THICK / 2, TABLE_TOP_Y + CUSHION_HEIGHT / 2, 0);
+farCushion.position.set(FRAME_HALF_LENGTH + CUSHION_THICK / 2, TABLE_TOP_Y + CUSHION_HEIGHT / 2, 0);
 farCushion.castShadow = true;
 farCushion.receiveShadow = true;
 tableGroup.add(farCushion);
 
 const nearCushion = new THREE.Mesh(shortCushionGeo, cushionMat);
-nearCushion.position.set(-HALF_LENGTH - CUSHION_THICK / 2, TABLE_TOP_Y + CUSHION_HEIGHT / 2, 0);
+nearCushion.position.set(-FRAME_HALF_LENGTH - CUSHION_THICK / 2, TABLE_TOP_Y + CUSHION_HEIGHT / 2, 0);
 nearCushion.castShadow = true;
 nearCushion.receiveShadow = true;
 tableGroup.add(nearCushion);
 
 // Cushion rail tops (the flat top surface of rails)
-const longRailTopGeo = new THREE.BoxGeometry(TABLE_LENGTH, 0.012, CUSHION_THICK + 0.04);
+const longRailTopGeo = new THREE.BoxGeometry(FRAME_INNER_LENGTH + CUSHION_THICK * 2, 0.012, CUSHION_THICK + 0.04);
 const rightRailTop = new THREE.Mesh(longRailTopGeo, railTopMat);
-rightRailTop.position.set(0, TABLE_TOP_Y + CUSHION_HEIGHT + 0.006, HALF_WIDTH + CUSHION_THICK / 2);
+rightRailTop.position.set(0, TABLE_TOP_Y + CUSHION_HEIGHT + 0.006, FRAME_HALF_WIDTH);
 rightRailTop.castShadow = true;
 tableGroup.add(rightRailTop);
 
 const leftRailTop = new THREE.Mesh(longRailTopGeo, railTopMat);
-leftRailTop.position.set(0, TABLE_TOP_Y + CUSHION_HEIGHT + 0.006, -HALF_WIDTH - CUSHION_THICK / 2);
+leftRailTop.position.set(0, TABLE_TOP_Y + CUSHION_HEIGHT + 0.006, -FRAME_HALF_WIDTH);
 leftRailTop.castShadow = true;
 tableGroup.add(leftRailTop);
 
-const shortRailTopGeo = new THREE.BoxGeometry(CUSHION_THICK + 0.04, 0.012, TABLE_WIDTH + CUSHION_THICK * 2);
+const shortRailTopGeo = new THREE.BoxGeometry(CUSHION_THICK + 0.04, 0.012, FRAME_INNER_WIDTH + CUSHION_THICK * 2);
 const farRailTop = new THREE.Mesh(shortRailTopGeo, railTopMat);
-farRailTop.position.set(HALF_LENGTH + CUSHION_THICK / 2, TABLE_TOP_Y + CUSHION_HEIGHT + 0.006, 0);
+farRailTop.position.set(FRAME_HALF_LENGTH, TABLE_TOP_Y + CUSHION_HEIGHT + 0.006, 0);
 farRailTop.castShadow = true;
 tableGroup.add(farRailTop);
 
 const nearRailTop = new THREE.Mesh(shortRailTopGeo, railTopMat);
-nearRailTop.position.set(-HALF_LENGTH - CUSHION_THICK / 2, TABLE_TOP_Y + CUSHION_HEIGHT + 0.006, 0);
+nearRailTop.position.set(-FRAME_HALF_LENGTH, TABLE_TOP_Y + CUSHION_HEIGHT + 0.006, 0);
 nearRailTop.castShadow = true;
 tableGroup.add(nearRailTop);
 
-// Corner cap blocks — prevent sunken/depressed look at cushion intersections
-const capGeo = new THREE.BoxGeometry(0.08, 0.025, 0.08);
-const capY = TABLE_TOP_Y + CUSHION_HEIGHT + 0.012;
-const capX = HALF_LENGTH + CUSHION_THICK / 2;
-const capZ = HALF_WIDTH + CUSHION_THICK / 2;
-const cornerPositions = [
-  [-capX, capY, -capZ], [capX, capY, -capZ],
-  [-capX, capY, capZ],  [capX, capY, capZ],
+// Corner cap blocks removed — pockets are now fully recessed, no protruding frame caps
+
+// ==================== PROFESSIONAL RECESSED SNOOKER POCKET ASSEMBLIES ====================
+// All pockets are FULLY RECESSED - brass rings visible ABOVE surface, bowls visible through table cutouts
+
+// Materials for professional pockets
+const brassRimMat = new THREE.MeshStandardMaterial({ color: 0xa89070, roughness: 0.3, metalness: 0.75 });
+const leatherInteriorMat = new THREE.MeshStandardMaterial({ color: 0x1a0a05, roughness: 0.85, metalness: 0.0 });
+const leatherBackMat = new THREE.MeshStandardMaterial({ color: 0x0d0603, roughness: 0.9, metalness: 0.0 });
+const pocketFeltMat = new THREE.MeshStandardMaterial({ color: 0x0c140c, roughness: 0.95, metalness: 0.0 });
+
+/**
+ * Creates a fully recessed corner pocket with:
+ * - Brass rim ring that sits ABOVE the table surface (clearly visible)
+ * - Deep concave leather bowl visible through table cutout
+ * - Pocket bag below table
+ */
+function createCornerPocket(x, z) {
+  const pocketGroup = new THREE.Group();
+  pocketGroup.renderOrder = 2; // render AFTER table surface
+  const pocketRadius = CORNER_POCKET_RADIUS; // 0.08
+
+  // Brass rim ring: POSITIONED ABOVE TABLE SURFACE (not flush, clearly visible)
+  // Ring sits at y = TABLE_TOP_Y + 0.006, significantly above table surface
+  const brassRingGeo = new THREE.TorusGeometry(pocketRadius, 0.018, 16, 48);
+  const brassRing = new THREE.Mesh(brassRingGeo, brassRimMat);
+  brassRing.rotation.x = -Math.PI / 2;
+  brassRing.position.set(x, TABLE_TOP_Y + 0.006, z);
+  brassRing.castShadow = true;
+  brassRing.renderOrder = 3;
+  pocketGroup.add(brassRing);
+
+  // Leather bowl: centered at table surface, slopes downward
+  // The bowl's UPPER EDGE is at TABLE_TOP_Y, visible through the table cutout
+  const bowlDepth = 0.065;
+  const bagDepth = 0.10;
+  const bagRadius = pocketRadius * 0.48;
+
+  const bowlPoints = [];
+  const segments = 28;
+
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    let r, py;
+
+    if (t < 0.10) {
+      // Rim zone: at table surface level (visible through cutout)
+      const ft = t / 0.10;
+      r = pocketRadius * (0.85 + ft * 0.08);
+      py = -ft * bowlDepth * 0.12;
+    } else if (t < 0.68) {
+      // Main bowl: smooth 30-35° inward slope downward
+      const ft = (t - 0.10) / 0.58;
+      r = pocketRadius * (0.93 - ft * 0.55);
+      py = -bowlDepth * 0.12 - ft * bowlDepth * 0.72;
+    } else {
+      // Ankle zone: steeper into bag
+      const ft = (t - 0.68) / 0.32;
+      r = pocketRadius * (0.38 - ft * 0.08);
+      py = -bowlDepth * 0.84 - ft * bowlDepth * 0.16;
+    }
+    bowlPoints.push(new THREE.Vector2(Math.max(r, bagRadius * 0.9), py));
+  }
+  bowlPoints.push(new THREE.Vector2(bagRadius * 0.9, bowlPoints[bowlPoints.length - 1].y - 0.005));
+  bowlPoints.push(new THREE.Vector2(bagRadius, bowlPoints[bowlPoints.length - 1].y));
+
+  const bowlLatheGeo = new THREE.LatheGeometry(bowlPoints, 48);
+  const bowl = new THREE.Mesh(bowlLatheGeo, leatherInteriorMat);
+  bowl.rotation.x = Math.PI / 2;
+  // Position bowl TOP EDGE slightly ABOVE table surface so it's clearly visible through cutout
+  bowl.position.set(x, TABLE_TOP_Y + 0.004, z);
+  bowl.castShadow = true;
+  bowl.receiveShadow = true;
+  bowl.renderOrder = 2;
+  bowl.depthTest = false; // render on top of table surface through the hole
+  bowl.depthWrite = false;
+  pocketGroup.add(bowl);
+
+  // Pocket bag below table
+  const bagGeo = new THREE.CylinderGeometry(bagRadius * 1.15, bagRadius * 0.82, bagDepth, 32, 1, true);
+  const bag = new THREE.Mesh(bagGeo, pocketFeltMat);
+  bag.position.set(x, TABLE_TOP_Y - bowlDepth - bagDepth / 2, z);
+  bag.castShadow = true;
+  bag.renderOrder = 2;
+  pocketGroup.add(bag);
+
+  const bagCapGeo = new THREE.CircleGeometry(bagRadius * 0.82, 32);
+  const bagCap = new THREE.Mesh(bagCapGeo, pocketFeltMat);
+  bagCap.rotation.x = Math.PI / 2;
+  bagCap.position.set(x, TABLE_TOP_Y - bowlDepth - bagDepth, z);
+  bagCap.receiveShadow = true;
+  bagCap.renderOrder = 2;
+  pocketGroup.add(bagCap);
+
+  return pocketGroup;
+}
+
+/**
+ * Creates a fully recessed side/middle pocket with:
+ * - D-shaped brass rim ring ABOVE table surface (clearly visible)
+ * - Elliptical leather bowl visible through table cutout
+ * - Pocket bag below table
+ */
+function createSidePocket(x, z) {
+  const pocketGroup = new THREE.Group();
+  pocketGroup.renderOrder = 2;
+  const pocketRadius = POCKET_RADIUS; // 0.07
+  const openingLen = pocketRadius * 1.6;
+
+  // D-shaped brass rim ring: POSITIONED ABOVE TABLE SURFACE
+  // Build D-shape as extruded outline
+  const dShape = new THREE.Shape();
+  const hw = pocketRadius;
+  const hl = openingLen / 2;
+
+  dShape.moveTo(-hl, -hw);
+  dShape.lineTo(hl, -hw);
+  dShape.absarc(hl, 0, hw, -Math.PI / 2, Math.PI / 2, false);
+  dShape.lineTo(-hl, hw);
+  dShape.closePath();
+
+  const dRimGeo = new THREE.ExtrudeGeometry(dShape, { depth: 0.018, bevelEnabled: false });
+  const dRim = new THREE.Mesh(dRimGeo, brassRimMat);
+  dRim.rotation.x = -Math.PI / 2;
+  dRim.position.set(x, TABLE_TOP_Y + 0.006 - 0.009, z); // center the extrusion
+  dRim.castShadow = true;
+  dRim.renderOrder = 3;
+  pocketGroup.add(dRim);
+
+  // Leather bowl: elliptical, recessed
+  const bowlDepth = 0.060;
+  const bagDepth = 0.10;
+  const bagRadius = pocketRadius * 0.42;
+
+  const bowlPoints = [];
+  const bSegs = 24;
+
+  for (let i = 0; i <= bSegs; i++) {
+    const t = i / bSegs;
+    let r, py;
+
+    if (t < 0.12) {
+      const ft = t / 0.12;
+      r = pocketRadius * (0.78 + ft * 0.10);
+      py = -ft * bowlDepth * 0.10;
+    } else if (t < 0.70) {
+      const ft = (t - 0.12) / 0.58;
+      r = pocketRadius * (0.88 - ft * 0.50);
+      py = -bowlDepth * 0.10 - ft * bowlDepth * 0.76;
+    } else {
+      const ft = (t - 0.70) / 0.30;
+      r = pocketRadius * (0.38 - ft * 0.08);
+      py = -bowlDepth * 0.86 - ft * bowlDepth * 0.14;
+    }
+    bowlPoints.push(new THREE.Vector2(Math.max(r, bagRadius * 0.88), py));
+  }
+  bowlPoints.push(new THREE.Vector2(bagRadius * 0.88, bowlPoints[bowlPoints.length - 1].y - 0.005));
+  bowlPoints.push(new THREE.Vector2(bagRadius, bowlPoints[bowlPoints.length - 1].y));
+
+  const bowlLatheGeo = new THREE.LatheGeometry(bowlPoints, 40);
+  const bowl = new THREE.Mesh(bowlLatheGeo, leatherInteriorMat);
+  bowl.rotation.x = Math.PI / 2;
+  // Position bowl TOP EDGE slightly ABOVE table surface so it's clearly visible through cutout
+  bowl.position.set(x, TABLE_TOP_Y + 0.004, z);
+  bowl.castShadow = true;
+  bowl.receiveShadow = true;
+  bowl.renderOrder = 2;
+  bowl.depthTest = false;
+  bowl.depthWrite = false;
+  pocketGroup.add(bowl);
+
+  // Pocket bag
+  const bagGeo = new THREE.CylinderGeometry(bagRadius * 1.1, bagRadius * 0.80, bagDepth, 32, 1, true);
+  const bag = new THREE.Mesh(bagGeo, pocketFeltMat);
+  bag.position.set(x, TABLE_TOP_Y - bowlDepth - bagDepth / 2, z);
+  bag.castShadow = true;
+  bag.renderOrder = 2;
+  pocketGroup.add(bag);
+
+  const bagCapGeo = new THREE.CircleGeometry(bagRadius * 0.80, 32);
+  const bagCap = new THREE.Mesh(bagCapGeo, pocketFeltMat);
+  bagCap.rotation.x = Math.PI / 2;
+  bagCap.position.set(x, TABLE_TOP_Y - bowlDepth - bagDepth, z);
+  bagCap.receiveShadow = true;
+  bagCap.renderOrder = 2;
+  pocketGroup.add(bagCap);
+
+  return pocketGroup;
+}
+
+// Build all 6 professional pockets
+// Corner pockets: at INNER corners of brown frame (where long and short rails meet)
+// Position: (±FRAME_HALF_LENGTH, ±FRAME_HALF_WIDTH)
+const cornerPocketPositions = [
+  { x: -FRAME_HALF_LENGTH, z: -FRAME_HALF_WIDTH },
+  { x: -FRAME_HALF_LENGTH, z: FRAME_HALF_WIDTH },
+  { x: FRAME_HALF_LENGTH, z: -FRAME_HALF_WIDTH },
+  { x: FRAME_HALF_LENGTH, z: FRAME_HALF_WIDTH },
 ];
-cornerPositions.forEach(([cx, cy, cz]) => {
-  const cap = new THREE.Mesh(capGeo, railTopMat);
-  cap.position.set(cx, cy, cz);
-  cap.castShadow = true;
-  tableGroup.add(cap);
+
+cornerPocketPositions.forEach(pos => {
+  tableGroup.add(createCornerPocket(pos.x, pos.z));
 });
 
-// Corner miter fill blocks — 45-triangular fills bridging cushion gaps at corners
-const miterGeo = new THREE.BoxGeometry(0.04, 0.025, 0.04);
-cornerPositions.forEach(([cx, cy, cz]) => {
-  const mx = cx > 0 ? cx - 0.06 : cx + 0.06;
-  const mz = cz > 0 ? cz - 0.06 : cz + 0.06;
-  const miter = new THREE.Mesh(miterGeo, railTopMat);
-  miter.position.set(mx, cy - 0.002, mz);
-  miter.castShadow = true;
-  tableGroup.add(miter);
-});
-
-// Pocket facings — angled leather pieces at each pocket bridging cushion to pocket hole
-const pocketPositionsFacing = [
-  { x: -HALF_LENGTH - 0.04, z: -HALF_WIDTH - 0.02, rot: Math.PI / 4 },
-  { x: -HALF_LENGTH - 0.04, z: HALF_WIDTH + 0.02, rot: -Math.PI / 4 },
-  { x: HALF_LENGTH + 0.04, z: -HALF_WIDTH - 0.02, rot: -Math.PI / 4 },
-  { x: HALF_LENGTH + 0.04, z: HALF_WIDTH + 0.02, rot: Math.PI / 4 },
-  { x: 0, z: -HALF_WIDTH - CUSHION_THICK / 2 - 0.01, rot: 0 },
-  { x: 0, z: HALF_WIDTH + CUSHION_THICK / 2 + 0.01, rot: Math.PI },
+// Middle pockets: centered on INNER edge of LONG brown rails
+// Position: (0, ±FRAME_HALF_WIDTH)
+const sidePocketPositions = [
+  { x: 0, z: -FRAME_HALF_WIDTH },
+  { x: 0, z: FRAME_HALF_WIDTH },
 ];
-const facingGeo = new THREE.PlaneGeometry(0.06, 0.03);
-pocketPositionsFacing.forEach(pf => {
-  const facing = new THREE.Mesh(facingGeo, pocketFacingMat);
-  facing.position.set(pf.x, TABLE_TOP_Y + CUSHION_HEIGHT - 0.005, pf.z);
-  facing.rotation.x = -Math.PI / 2 + 0.5; // ~30 tilt from horizontal
-  facing.rotation.z = pf.rot;
-  facing.receiveShadow = true;
-  tableGroup.add(facing);
-});
-
-// Pocket drop cylinders — simulate pocket bag opening depth
-const pocketDropPositions = [
-  { x: -HALF_LENGTH, z: -HALF_WIDTH, r: CORNER_POCKET_RADIUS },
-  { x: -HALF_LENGTH, z: HALF_WIDTH, r: CORNER_POCKET_RADIUS },
-  { x: HALF_LENGTH, z: -HALF_WIDTH, r: CORNER_POCKET_RADIUS },
-  { x: HALF_LENGTH, z: HALF_WIDTH, r: CORNER_POCKET_RADIUS },
-  { x: 0, z: -HALF_WIDTH, r: POCKET_RADIUS },
-  { x: 0, z: HALF_WIDTH, r: POCKET_RADIUS },
-];
-pocketDropPositions.forEach(pd => {
-  const dropGeo = new THREE.CylinderGeometry(pd.r, pd.r + 0.015, 0.12, 24, 1, true);
-  const drop = new THREE.Mesh(dropGeo, pocketInnerMat);
-  drop.position.set(pd.x, TABLE_TOP_Y - 0.04, pd.z);
-  drop.receiveShadow = true;
-  tableGroup.add(drop);
+sidePocketPositions.forEach(pos => {
+  tableGroup.add(createSidePocket(pos.x, pos.z));
 });
 
 // Table apron/skirt — panels under playing surface for visual mass
 const apronHeight = 0.12;
 const apronThickness = 0.03;
-const longApronGeo = new THREE.BoxGeometry(TABLE_LENGTH + 0.06, apronHeight, apronThickness);
-const shortApronGeo = new THREE.BoxGeometry(apronThickness, apronHeight, TABLE_WIDTH + 0.06);
+const longApronGeo = new THREE.BoxGeometry(FRAME_INNER_LENGTH + 0.04, apronHeight, apronThickness);
+const shortApronGeo = new THREE.BoxGeometry(apronThickness, apronHeight, FRAME_INNER_WIDTH + 0.04);
 const apronY = TABLE_TOP_Y - SURFACE_THICKNESS / 2 - apronHeight / 2;
 
 const apronPositions = [
-  { geo: longApronGeo, x: 0, z: -HALF_WIDTH - 0.03 },
-  { geo: longApronGeo, x: 0, z: HALF_WIDTH + 0.03 },
-  { geo: shortApronGeo, x: -HALF_LENGTH - 0.03, z: 0 },
-  { geo: shortApronGeo, x: HALF_LENGTH + 0.03, z: 0 },
+  { geo: longApronGeo, x: 0, z: -FRAME_HALF_WIDTH - 0.015 },
+  { geo: longApronGeo, x: 0, z: FRAME_HALF_WIDTH + 0.015 },
+  { geo: shortApronGeo, x: -FRAME_HALF_LENGTH - 0.015, z: 0 },
+  { geo: shortApronGeo, x: FRAME_HALF_LENGTH + 0.015, z: 0 },
 ];
 apronPositions.forEach(ap => {
   const apron = new THREE.Mesh(ap.geo, apronMat);
@@ -583,10 +800,10 @@ apronPositions.forEach(ap => {
 
 // Rebuilt legs — 3-section turned-wood appearance per leg
 const legPositions = [
-  [-HALF_LENGTH + 0.2, -HALF_WIDTH + 0.18],
-  [-HALF_LENGTH + 0.2, HALF_WIDTH - 0.18],
-  [HALF_LENGTH - 0.2, -HALF_WIDTH + 0.18],
-  [HALF_LENGTH - 0.2, HALF_WIDTH - 0.18],
+  [-FRAME_HALF_LENGTH + 0.15, -FRAME_HALF_WIDTH + 0.12],
+  [-FRAME_HALF_LENGTH + 0.15, FRAME_HALF_WIDTH - 0.12],
+  [FRAME_HALF_LENGTH - 0.15, -FRAME_HALF_WIDTH + 0.12],
+  [FRAME_HALF_LENGTH - 0.15, FRAME_HALF_WIDTH - 0.12],
 ];
 
 legPositions.forEach(([lx, lz]) => {
@@ -619,40 +836,37 @@ legPositions.forEach(([lx, lz]) => {
 });
 
 // Cross beams under table (structural detail)
-const beamGeo = new THREE.BoxGeometry(TABLE_LENGTH - 0.8, 0.04, 0.06);
+const beamGeo = new THREE.BoxGeometry(FRAME_INNER_LENGTH - 0.6, 0.04, 0.06);
 const beamMat = new THREE.MeshStandardMaterial({ color: 0x3d2010, roughness: 0.6 });
 const beam = new THREE.Mesh(beamGeo, beamMat);
 beam.position.set(0, TABLE_TOP_Y - 0.08, 0);
 beam.castShadow = true;
 tableGroup.add(beam);
 
-const beamGeo2 = new THREE.BoxGeometry(0.06, 0.04, TABLE_WIDTH - 0.5);
+const beamGeo2 = new THREE.BoxGeometry(0.06, 0.04, FRAME_INNER_WIDTH - 0.4);
 const beam2 = new THREE.Mesh(beamGeo2, beamMat);
 beam2.position.set(0, TABLE_TOP_Y - 0.08, 0);
 beam2.castShadow = true;
 tableGroup.add(beam2);
 
-// ==================== POCKET MARKERS ====================
+// ==================== POCKET MARKERS (collision only) ====================
+// Note: Visual torus removed - replaced by professional brass rim in pocket assembly
 const pocketPositions = [
-  { x: -HALF_LENGTH, z: -HALF_WIDTH, type: 'corner' },
-  { x: -HALF_LENGTH, z: HALF_WIDTH, type: 'corner' },
-  { x: HALF_LENGTH, z: -HALF_WIDTH, type: 'corner' },
-  { x: HALF_LENGTH, z: HALF_WIDTH, type: 'corner' },
-  { x: 0, z: -HALF_WIDTH, type: 'side' },
-  { x: 0, z: HALF_WIDTH, type: 'side' },
+  { x: -FRAME_HALF_LENGTH, z: -FRAME_HALF_WIDTH, type: 'corner' },
+  { x: -FRAME_HALF_LENGTH, z: FRAME_HALF_WIDTH, type: 'corner' },
+  { x: FRAME_HALF_LENGTH, z: -FRAME_HALF_WIDTH, type: 'corner' },
+  { x: FRAME_HALF_LENGTH, z: FRAME_HALF_WIDTH, type: 'corner' },
+  { x: 0, z: -FRAME_HALF_WIDTH, type: 'side' },
+  { x: 0, z: FRAME_HALF_WIDTH, type: 'side' },
 ];
 
 const pocketMarkers = [];
 pocketPositions.forEach(pp => {
-  const torusRadius = pp.type === 'corner' ? 0.058 : 0.048;
-  const torusGeo = new THREE.TorusGeometry(torusRadius, 0.018, 16, 32);
-  const torusMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.35, metalness: 0.25 });
-  const torus = new THREE.Mesh(torusGeo, torusMat);
-  torus.rotation.x = -Math.PI / 2;
-  torus.position.set(pp.x, TABLE_TOP_Y + 0.014, pp.z);
-  torus.receiveShadow = true;
-  tableGroup.add(torus);
-  pocketMarkers.push({ mesh: torus, x: pp.x, z: pp.z, radius: pp.type === 'corner' ? CORNER_POCKET_RADIUS : POCKET_RADIUS });
+  pocketMarkers.push({
+    x: pp.x,
+    z: pp.z,
+    radius: pp.type === 'corner' ? CORNER_POCKET_RADIUS : POCKET_RADIUS
+  });
 });
 
 // ==================== BALL CREATION ====================
@@ -861,7 +1075,7 @@ document.addEventListener('mousemove', (e) => {
     }
     // Also keep within table side bounds
     newZ = Math.max(-BOUND_Z, Math.min(BOUND_Z, newZ));
-    newX = Math.max(-HALF_LENGTH + BALL_RADIUS, newX);
+    newX = Math.max(-FRAME_HALF_LENGTH + BALL_RADIUS, newX);
 
     cueBall.position.set(newX, BALL_Y, newZ);
     lastCueBallPos.copy(cueBall.position);
