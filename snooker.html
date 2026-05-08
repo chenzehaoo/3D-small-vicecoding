@@ -198,6 +198,90 @@ const SURFACE_TOP_Y = TABLE_TOP_Y + SURFACE_THICKNESS / 2; // actual playing sur
 // Ball bottom = BALL_Y - BALL_RADIUS; minus 0.0005 compensates sphere tessellation gap
 const BALL_Y = SURFACE_TOP_Y + BALL_RADIUS - 0.0005;
 
+// ==================== PROCEDURAL TEXTURES ====================
+function createBaizeTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+
+  // Base green baize — exact original color
+  ctx.fillStyle = '#0d5e2b';
+  ctx.fillRect(0, 0, 512, 512);
+
+  // Very subtle pixel noise for fabric nap (preserve overall color)
+  const imageData = ctx.getImageData(0, 0, 512, 512);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    const noise = (Math.random() - 0.5) * 8;
+    data[i] = Math.min(255, Math.max(0, data[i] + noise));
+    data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + noise));
+    data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + noise));
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  // Subtle horizontal striations for felt direction
+  for (let y = 0; y < 512; y += 3) {
+    const alpha = 0.015 + Math.random() * 0.025;
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+    ctx.fillRect(0, y, 512, 2);
+  }
+
+  return new THREE.CanvasTexture(canvas);
+}
+
+function createWoodTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+
+  // Warm brown base — exact original rail top color
+  ctx.fillStyle = '#6b4423';
+  ctx.fillRect(0, 0, 512, 128);
+
+  // Subtle vertical sin-wave color banding for wood grain
+  const imageData = ctx.getImageData(0, 0, 512, 128);
+  const data = imageData.data;
+  for (let x = 0; x < 512; x++) {
+    const variation = (Math.sin(x * 0.08) + Math.sin(x * 0.15) * 0.4) * 6;
+    for (let y = 0; y < 128; y++) {
+      const idx = (y * 512 + x) * 4;
+      data[idx] = Math.min(255, Math.max(0, data[idx] + variation));
+      data[idx + 1] = Math.min(255, Math.max(0, data[idx + 1] + variation * 0.5));
+      data[idx + 2] = Math.min(255, Math.max(0, data[idx + 2] + variation * 0.2));
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  // Dark grain streaks via bezier curves — fewer and more subtle
+  for (let i = 0; i < 20; i++) {
+    const startX = Math.random() * 512;
+    ctx.beginPath();
+    ctx.moveTo(startX, 0);
+    const cp1x = startX + (Math.random() - 0.5) * 50;
+    const cp2x = startX + (Math.random() - 0.5) * 50;
+    ctx.bezierCurveTo(cp1x, 32, cp2x, 96, startX + (Math.random() - 0.5) * 20, 128);
+    ctx.strokeStyle = `rgba(30,15,0,${0.05 + Math.random() * 0.1})`;
+    ctx.lineWidth = 0.5 + Math.random() * 1.2;
+    ctx.stroke();
+  }
+
+  return new THREE.CanvasTexture(canvas);
+}
+
+const baizeTexture = createBaizeTexture();
+baizeTexture.colorSpace = THREE.SRGBColorSpace;
+baizeTexture.wrapS = THREE.RepeatWrapping;
+baizeTexture.wrapT = THREE.RepeatWrapping;
+baizeTexture.repeat.set(4, 2);
+
+const woodTexture = createWoodTexture();
+woodTexture.colorSpace = THREE.SRGBColorSpace;
+woodTexture.wrapS = THREE.RepeatWrapping;
+woodTexture.wrapT = THREE.RepeatWrapping;
+woodTexture.repeat.set(2, 1);
+
 // ==================== THREE.JS SETUP ====================
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x1a1a2e);
@@ -225,18 +309,18 @@ scene.add(hemiLight);
 const ambientLight = new THREE.AmbientLight(0xffffff, 1.6);
 scene.add(ambientLight);
 
-// DirectionalLight: soft top-down sun for subtle depth shadows, wide uniform coverage
-const sunLight = new THREE.DirectionalLight(0xffffff, 3.0);
-sunLight.position.set(0, TABLE_TOP_Y + 3.5, 0.3);
+// DirectionalLight: slightly off-vertical sun for natural shadow gradients, better texture definition
+const sunLight = new THREE.DirectionalLight(0xffffff, 3.5);
+sunLight.position.set(0.5, TABLE_TOP_Y + 3.5, 0.9);
 sunLight.target.position.set(0, TABLE_TOP_Y, 0);
 sunLight.castShadow = true;
 sunLight.shadow.mapSize.set(2048, 2048);
 sunLight.shadow.camera.near = 0.5;
 sunLight.shadow.camera.far = 15;
-sunLight.shadow.camera.left = -3;
-sunLight.shadow.camera.right = 3;
-sunLight.shadow.camera.top = 2;
-sunLight.shadow.camera.bottom = -2;
+sunLight.shadow.camera.left = -4;
+sunLight.shadow.camera.right = 4;
+sunLight.shadow.camera.top = 2.5;
+sunLight.shadow.camera.bottom = -2.5;
 sunLight.shadow.bias = -0.00008;
 sunLight.shadow.normalBias = 0.02;
 sunLight.shadow.radius = 5;
@@ -244,8 +328,48 @@ scene.add(sunLight);
 scene.add(sunLight.target);
 
 // ==================== FLOOR ====================
+// Procedural carpet texture
+function createCarpetTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+
+  // Dark base
+  ctx.fillStyle = '#1a0f0a';
+  ctx.fillRect(0, 0, 256, 256);
+
+  // Fine pixel noise for carpet fiber
+  const imageData = ctx.getImageData(0, 0, 256, 256);
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const noise = (Math.random() - 0.5) * 16;
+    d[i] = Math.min(255, Math.max(0, d[i] + noise));
+    d[i + 1] = Math.min(255, Math.max(0, d[i + 1] + noise * 0.5));
+    d[i + 2] = Math.min(255, Math.max(0, d[i + 2] + noise * 0.3));
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  // Subtle irregular loop texture
+  for (let i = 0; i < 200; i++) {
+    const x = Math.random() * 256;
+    const y = Math.random() * 256;
+    ctx.fillStyle = `rgba(0,0,0,${0.02 + Math.random() * 0.05})`;
+    ctx.beginPath();
+    ctx.arc(x, y, 1 + Math.random() * 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  return new THREE.CanvasTexture(canvas);
+}
+
+const carpetTexture = createCarpetTexture();
+carpetTexture.wrapS = THREE.RepeatWrapping;
+carpetTexture.wrapT = THREE.RepeatWrapping;
+carpetTexture.repeat.set(4, 3);
+
 const floorGeo = new THREE.PlaneGeometry(12, 12);
-const floorMat = new THREE.MeshStandardMaterial({ color: 0x2a1f14, roughness: 0.85, metalness: 0.05 });
+const floorMat = new THREE.MeshStandardMaterial({ color: 0x1f1510, roughness: 0.85, metalness: 0.05 });
 const floor = new THREE.Mesh(floorGeo, floorMat);
 floor.rotation.x = -Math.PI / 2;
 floor.position.y = 0.001;
@@ -254,7 +378,7 @@ scene.add(floor);
 
 // Carpet under table
 const carpetGeo = new THREE.PlaneGeometry(5, 3.2);
-const carpetMat = new THREE.MeshStandardMaterial({ color: 0x1a0f0a, roughness: 0.95 });
+const carpetMat = new THREE.MeshStandardMaterial({ map: carpetTexture, color: 0x141212, roughness: 0.95 });
 const carpet = new THREE.Mesh(carpetGeo, carpetMat);
 carpet.rotation.x = -Math.PI / 2;
 carpet.position.y = 0.002;
@@ -267,7 +391,7 @@ scene.add(tableGroup);
 
 // Playing surface
 const surfaceGeo = new THREE.BoxGeometry(TABLE_LENGTH, 0.025, TABLE_WIDTH);
-const surfaceMat = new THREE.MeshStandardMaterial({ color: 0x0d5e2b, roughness: 0.88, metalness: 0.02 });
+const surfaceMat = new THREE.MeshStandardMaterial({ color: 0x0d5e2b, map: baizeTexture, roughness: 0.82, metalness: 0.02 });
 const surface = new THREE.Mesh(surfaceGeo, surfaceMat);
 surface.position.y = TABLE_TOP_Y;
 surface.receiveShadow = true;
@@ -315,7 +439,12 @@ tableGroup.add(dHighlight);
 // Spot markers removed — clean green baize with no auxiliary markings
 
 // Cushions
-const cushionMat = new THREE.MeshStandardMaterial({ color: 0x5c3a1e, roughness: 0.55, metalness: 0.05 });
+const cushionMat = new THREE.MeshStandardMaterial({ color: 0x5c3a1e, map: woodTexture, roughness: 0.55, metalness: 0.05 });
+const railTopMat = new THREE.MeshStandardMaterial({ color: 0x6b4423, map: woodTexture, roughness: 0.45, metalness: 0.05 });
+const pocketFacingMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.3, metalness: 0.1 });
+const pocketInnerMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.5, metalness: 0.05 });
+const apronMat = new THREE.MeshStandardMaterial({ color: 0x5c3a1e, map: woodTexture, roughness: 0.55, metalness: 0.05 });
+const legMat = new THREE.MeshStandardMaterial({ color: 0x3d2010, map: woodTexture, roughness: 0.45, metalness: 0.08 });
 
 // Long cushions (along X, at Z edges)
 const longCushionGeo = new THREE.BoxGeometry(TABLE_LENGTH, CUSHION_HEIGHT, CUSHION_THICK);
@@ -346,8 +475,6 @@ nearCushion.receiveShadow = true;
 tableGroup.add(nearCushion);
 
 // Cushion rail tops (the flat top surface of rails)
-const railTopMat = new THREE.MeshStandardMaterial({ color: 0x6b4423, roughness: 0.5, metalness: 0.05 });
-
 const longRailTopGeo = new THREE.BoxGeometry(TABLE_LENGTH, 0.012, CUSHION_THICK + 0.04);
 const rightRailTop = new THREE.Mesh(longRailTopGeo, railTopMat);
 rightRailTop.position.set(0, TABLE_TOP_Y + CUSHION_HEIGHT + 0.006, HALF_WIDTH + CUSHION_THICK / 2);
@@ -370,35 +497,138 @@ nearRailTop.position.set(-HALF_LENGTH - CUSHION_THICK / 2, TABLE_TOP_Y + CUSHION
 nearRailTop.castShadow = true;
 tableGroup.add(nearRailTop);
 
-// Legs
-const legGeo = new THREE.CylinderGeometry(0.045, 0.05, TABLE_HEIGHT - 0.02, 16);
-const legMat = new THREE.MeshStandardMaterial({ color: 0x3d2010, roughness: 0.5, metalness: 0.08 });
-const legPositions = [
-  [-HALF_LENGTH + 0.2, (TABLE_HEIGHT - 0.02) / 2, -HALF_WIDTH + 0.18],
-  [-HALF_LENGTH + 0.2, (TABLE_HEIGHT - 0.02) / 2, HALF_WIDTH - 0.18],
-  [HALF_LENGTH - 0.2, (TABLE_HEIGHT - 0.02) / 2, -HALF_WIDTH + 0.18],
-  [HALF_LENGTH - 0.2, (TABLE_HEIGHT - 0.02) / 2, HALF_WIDTH - 0.18],
+// Corner cap blocks — prevent sunken/depressed look at cushion intersections
+const capGeo = new THREE.BoxGeometry(0.08, 0.025, 0.08);
+const capY = TABLE_TOP_Y + CUSHION_HEIGHT + 0.012;
+const capX = HALF_LENGTH + CUSHION_THICK / 2;
+const capZ = HALF_WIDTH + CUSHION_THICK / 2;
+const cornerPositions = [
+  [-capX, capY, -capZ], [capX, capY, -capZ],
+  [-capX, capY, capZ],  [capX, capY, capZ],
 ];
-
-legPositions.forEach(([lx, ly, lz]) => {
-  const leg = new THREE.Mesh(legGeo, legMat);
-  leg.position.set(lx, ly, lz);
-  leg.castShadow = true;
-  leg.receiveShadow = true;
-  tableGroup.add(leg);
+cornerPositions.forEach(([cx, cy, cz]) => {
+  const cap = new THREE.Mesh(capGeo, railTopMat);
+  cap.position.set(cx, cy, cz);
+  cap.castShadow = true;
+  tableGroup.add(cap);
 });
 
-// Cross beams under table (optional structural detail)
+// Corner miter fill blocks — 45-triangular fills bridging cushion gaps at corners
+const miterGeo = new THREE.BoxGeometry(0.04, 0.025, 0.04);
+cornerPositions.forEach(([cx, cy, cz]) => {
+  const mx = cx > 0 ? cx - 0.06 : cx + 0.06;
+  const mz = cz > 0 ? cz - 0.06 : cz + 0.06;
+  const miter = new THREE.Mesh(miterGeo, railTopMat);
+  miter.position.set(mx, cy - 0.002, mz);
+  miter.castShadow = true;
+  tableGroup.add(miter);
+});
+
+// Pocket facings — angled leather pieces at each pocket bridging cushion to pocket hole
+const pocketPositionsFacing = [
+  { x: -HALF_LENGTH - 0.04, z: -HALF_WIDTH - 0.02, rot: Math.PI / 4 },
+  { x: -HALF_LENGTH - 0.04, z: HALF_WIDTH + 0.02, rot: -Math.PI / 4 },
+  { x: HALF_LENGTH + 0.04, z: -HALF_WIDTH - 0.02, rot: -Math.PI / 4 },
+  { x: HALF_LENGTH + 0.04, z: HALF_WIDTH + 0.02, rot: Math.PI / 4 },
+  { x: 0, z: -HALF_WIDTH - CUSHION_THICK / 2 - 0.01, rot: 0 },
+  { x: 0, z: HALF_WIDTH + CUSHION_THICK / 2 + 0.01, rot: Math.PI },
+];
+const facingGeo = new THREE.PlaneGeometry(0.06, 0.03);
+pocketPositionsFacing.forEach(pf => {
+  const facing = new THREE.Mesh(facingGeo, pocketFacingMat);
+  facing.position.set(pf.x, TABLE_TOP_Y + CUSHION_HEIGHT - 0.005, pf.z);
+  facing.rotation.x = -Math.PI / 2 + 0.5; // ~30 tilt from horizontal
+  facing.rotation.z = pf.rot;
+  facing.receiveShadow = true;
+  tableGroup.add(facing);
+});
+
+// Pocket drop cylinders — simulate pocket bag opening depth
+const pocketDropPositions = [
+  { x: -HALF_LENGTH, z: -HALF_WIDTH, r: CORNER_POCKET_RADIUS },
+  { x: -HALF_LENGTH, z: HALF_WIDTH, r: CORNER_POCKET_RADIUS },
+  { x: HALF_LENGTH, z: -HALF_WIDTH, r: CORNER_POCKET_RADIUS },
+  { x: HALF_LENGTH, z: HALF_WIDTH, r: CORNER_POCKET_RADIUS },
+  { x: 0, z: -HALF_WIDTH, r: POCKET_RADIUS },
+  { x: 0, z: HALF_WIDTH, r: POCKET_RADIUS },
+];
+pocketDropPositions.forEach(pd => {
+  const dropGeo = new THREE.CylinderGeometry(pd.r, pd.r + 0.015, 0.12, 24, 1, true);
+  const drop = new THREE.Mesh(dropGeo, pocketInnerMat);
+  drop.position.set(pd.x, TABLE_TOP_Y - 0.04, pd.z);
+  drop.receiveShadow = true;
+  tableGroup.add(drop);
+});
+
+// Table apron/skirt — panels under playing surface for visual mass
+const apronHeight = 0.12;
+const apronThickness = 0.03;
+const longApronGeo = new THREE.BoxGeometry(TABLE_LENGTH + 0.06, apronHeight, apronThickness);
+const shortApronGeo = new THREE.BoxGeometry(apronThickness, apronHeight, TABLE_WIDTH + 0.06);
+const apronY = TABLE_TOP_Y - SURFACE_THICKNESS / 2 - apronHeight / 2;
+
+const apronPositions = [
+  { geo: longApronGeo, x: 0, z: -HALF_WIDTH - 0.03 },
+  { geo: longApronGeo, x: 0, z: HALF_WIDTH + 0.03 },
+  { geo: shortApronGeo, x: -HALF_LENGTH - 0.03, z: 0 },
+  { geo: shortApronGeo, x: HALF_LENGTH + 0.03, z: 0 },
+];
+apronPositions.forEach(ap => {
+  const apron = new THREE.Mesh(ap.geo, apronMat);
+  apron.position.set(ap.x, apronY, ap.z);
+  apron.castShadow = true;
+  apron.receiveShadow = true;
+  tableGroup.add(apron);
+});
+
+// Rebuilt legs — 3-section turned-wood appearance per leg
+const legPositions = [
+  [-HALF_LENGTH + 0.2, -HALF_WIDTH + 0.18],
+  [-HALF_LENGTH + 0.2, HALF_WIDTH - 0.18],
+  [HALF_LENGTH - 0.2, -HALF_WIDTH + 0.18],
+  [HALF_LENGTH - 0.2, HALF_WIDTH - 0.18],
+];
+
+legPositions.forEach(([lx, lz]) => {
+  const legGroup = new THREE.Group();
+
+  // Top capital (wide short cylinder)
+  const capitalGeo = new THREE.CylinderGeometry(0.055, 0.05, 0.07, 16);
+  const capital = new THREE.Mesh(capitalGeo, legMat);
+  capital.position.y = TABLE_TOP_Y - SURFACE_THICKNESS - 0.035;
+  capital.castShadow = true;
+  legGroup.add(capital);
+
+  // Middle shaft (tapered long cylinder)
+  const shaftGeo = new THREE.CylinderGeometry(0.04, 0.032, TABLE_HEIGHT - 0.22, 16);
+  const shaft = new THREE.Mesh(shaftGeo, legMat);
+  shaft.position.y = TABLE_HEIGHT / 2 - 0.02;
+  shaft.castShadow = true;
+  legGroup.add(shaft);
+
+  // Bottom foot/base (wider short cylinder)
+  const footGeo = new THREE.CylinderGeometry(0.048, 0.052, 0.06, 16);
+  const foot = new THREE.Mesh(footGeo, legMat);
+  foot.position.y = 0.03;
+  foot.castShadow = true;
+  legGroup.add(foot);
+
+  legGroup.position.set(lx, 0, lz);
+  legGroup.receiveShadow = true;
+  tableGroup.add(legGroup);
+});
+
+// Cross beams under table (structural detail)
 const beamGeo = new THREE.BoxGeometry(TABLE_LENGTH - 0.8, 0.04, 0.06);
 const beamMat = new THREE.MeshStandardMaterial({ color: 0x3d2010, roughness: 0.6 });
 const beam = new THREE.Mesh(beamGeo, beamMat);
-beam.position.set(0, TABLE_TOP_Y - 0.06, 0);
+beam.position.set(0, TABLE_TOP_Y - 0.08, 0);
 beam.castShadow = true;
 tableGroup.add(beam);
 
 const beamGeo2 = new THREE.BoxGeometry(0.06, 0.04, TABLE_WIDTH - 0.5);
 const beam2 = new THREE.Mesh(beamGeo2, beamMat);
-beam2.position.set(0, TABLE_TOP_Y - 0.06, 0);
+beam2.position.set(0, TABLE_TOP_Y - 0.08, 0);
 beam2.castShadow = true;
 tableGroup.add(beam2);
 
@@ -414,9 +644,9 @@ const pocketPositions = [
 
 const pocketMarkers = [];
 pocketPositions.forEach(pp => {
-  const radius = pp.type === 'corner' ? 0.055 : 0.045;
-  const torusGeo = new THREE.TorusGeometry(radius, 0.012, 16, 24);
-  const torusMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4, metalness: 0.3 });
+  const torusRadius = pp.type === 'corner' ? 0.058 : 0.048;
+  const torusGeo = new THREE.TorusGeometry(torusRadius, 0.018, 16, 32);
+  const torusMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.35, metalness: 0.25 });
   const torus = new THREE.Mesh(torusGeo, torusMat);
   torus.rotation.x = -Math.PI / 2;
   torus.position.set(pp.x, TABLE_TOP_Y + 0.014, pp.z);
